@@ -1,0 +1,8 @@
+-- A list of SQL queries to be executed.
+-- Each query should be on a new line.
+-- Lines starting with -- are treated as comments and ignored.
+-- Blank lines are also ignored.
+
+SELECT * FROM public.bank_customer LIMIT 10;
+SELECT COUNT(*) FROM public.bank_customer;
+SELECT 1;
