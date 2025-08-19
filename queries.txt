@@ -3,6 +3,6 @@
 -- Lines starting with -- are treated as comments and ignored.
 -- Blank lines are also ignored.
 
-SELECT * FROM public.bank_customer LIMIT 10;
+SELECT * FROM public.bank_customer LIMIT 20;
 SELECT COUNT(*) FROM public.bank_customer;
 SELECT 1;
