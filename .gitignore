@@ -1,2 +1,5 @@
 query_results.json
 queries.txt
+benchmark_report.json
+query_results.pdf
+go.sum
