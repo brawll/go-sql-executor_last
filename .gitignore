@@ -3,3 +3,6 @@ queries.txt
 benchmark_report.json
 query_results.pdf
 go.sum
+query_results_landscape_split.pdf
+query_results_landscape.pdf
+query_results_landscapev1.pdf

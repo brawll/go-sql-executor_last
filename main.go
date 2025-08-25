@@ -42,14 +42,9 @@ type QueryResult struct {
 	Timestamp string     `json:"timestamp"`
 }
 
-// OutputFormat represents different ways to display results.
-type OutputFormat string
-
 const (
-	FormatTable OutputFormat = "table"
-	FormatJSON  OutputFormat = "json"
-	FormatCSV   OutputFormat = "csv"
-	FormatPDF   OutputFormat = "pdf"
+	pageWidth  = 841.995 // Landscape A4 width (was height in portrait)
+	pageHeight = 595.35  // Landscape A4 height (was width in portrait)
 )
 
 // PDFConfig holds PDF generation configuration.
@@ -73,7 +68,7 @@ type PDFGenerator struct {
 	config PDFConfig
 }
 
-// DefaultPDFConfig returns a sensible default configuration.
+// Update DefaultPDFConfig for landscape and many columns
 func DefaultPDFConfig() PDFConfig {
 	return PDFConfig{
 		Title:          "SQL Query Results",
@@ -81,10 +76,10 @@ func DefaultPDFConfig() PDFConfig {
 		Subject:        "Database Query Report",
 		CompanyName:    "Your Company",
 		HeaderColor:    []uint8{52, 73, 94},
-		TableRowHeight: 25.0,
-		FontSize:       10,
-		MarginX:        30.0,
-		MarginY:        30.0,
+		TableRowHeight: 20.0, // Reduced from 25.0
+		FontSize:       8,    // Reduced from 10
+		MarginX:        20.0, // Reduced from 30.0
+		MarginY:        20.0, // Reduced from 30.0
 		ShowTimestamp:  true,
 		ShowQuery:      true,
 	}
@@ -238,54 +233,6 @@ func (pg *PDFGenerator) addTable(data *QueryData, startY float64) {
 	pg.drawTableRows(data, colWidths, currentY)
 }
 
-// drawTableHeaders draws the table header row.
-func (pg *PDFGenerator) drawTableHeaders(columns []string, colWidths []float64, startY float64) float64 {
-	headerHeight := pg.config.TableRowHeight
-
-	// Set header style
-	pg.pdf.SetFillColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
-	pg.pdf.SetTextColor(255, 255, 255)
-	pg.pdf.SetFont("arial", "", pg.config.FontSize+1) // Slightly larger for headers
-
-	// Draw header background
-	totalWidth := 0.0
-	for _, w := range colWidths {
-		totalWidth += w
-	}
-	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, startY, totalWidth, headerHeight, "F")
-
-	// Draw header borders
-	pg.pdf.SetStrokeColor(100, 100, 100)
-	pg.pdf.SetLineWidth(0.5)
-
-	currentX := pg.config.MarginX
-	for i, col := range columns {
-		// Vertical border
-		if i > 0 {
-			pg.pdf.Line(currentX, startY, currentX, startY+headerHeight)
-		}
-
-		// Header text
-		pg.pdf.SetXY(currentX+3, startY+8) // Padding
-
-		// Truncate long column names
-		colName := col
-		maxChars := int(colWidths[i]/6) - 2 // Approximate characters that fit
-		if len(colName) > maxChars && maxChars > 3 {
-			colName = colName[:maxChars-3] + "..."
-		}
-
-		pg.pdf.Cell(nil, colName)
-		currentX += colWidths[i]
-	}
-
-	// Draw horizontal borders
-	pg.pdf.Line(pg.config.MarginX, startY, pg.config.MarginX+totalWidth, startY)                           // Top
-	pg.pdf.Line(pg.config.MarginX, startY+headerHeight, pg.config.MarginX+totalWidth, startY+headerHeight) // Bottom
-
-	return startY + headerHeight
-}
-
 // drawTableRows draws all the table data rows - FIXED VERSION WITH PAGE NUMBERS
 func (pg *PDFGenerator) drawTableRows(data *QueryData, colWidths []float64, startY float64) {
 	if len(data.Rows) == 0 {
@@ -296,10 +243,8 @@ func (pg *PDFGenerator) drawTableRows(data *QueryData, colWidths []float64, star
 	currentY := startY
 	pageNum := 1 // Track page numbers
 
-	// A4 page dimensions: 595.35 x 841.995 points
-	const pageHeight = 841.995
 	bottomMargin := pg.config.MarginY
-	maxYPosition := pageHeight - bottomMargin - 20 // Extra padding for safety
+	maxYPosition := pageHeight - bottomMargin - 20 // Use new pageHeight constant
 
 	// Set row style
 	pg.pdf.SetTextColor(0, 0, 0)
@@ -393,21 +338,311 @@ func (pg *PDFGenerator) drawTableRows(data *QueryData, colWidths []float64, star
 	pg.addPageNumber(pageNum)
 }
 
-// Add page numbers
+// Update addPageNumber function
 func (pg *PDFGenerator) addPageNumber(pageNum int) {
-	// A4 page height in points
-	const pageHeight = 841.995
 	pg.pdf.SetFont("arial", "", 8)
 	pg.pdf.SetTextColor(150, 150, 150)
-	pg.pdf.SetXY(pg.config.MarginX, pageHeight-20)
+	pg.pdf.SetXY(pg.config.MarginX, pageHeight-20) // Use new pageHeight
 	pg.pdf.Cell(nil, fmt.Sprintf("Page %d", pageNum))
+}
+
+// Add this new method for two-level pagination
+func (pg *PDFGenerator) addSplitTableWithFullPagination(data *QueryData, startY float64, maxColumnsPerPage int) {
+	if data == nil || len(data.Columns) == 0 || len(data.Rows) == 0 {
+		pg.pdf.SetFont("arial", "", 10)
+		pg.pdf.SetTextColor(100, 100, 100)
+		pg.pdf.SetXY(pg.config.MarginX, startY)
+		pg.pdf.Cell(nil, "📭 No data returned.")
+		return
+	}
+
+	// If columns fit in one page, use regular table with pagination
+	if len(data.Columns) <= maxColumnsPerPage {
+		pg.addTableWithRowControl(data, startY, false) // Enable row pagination
+		return
+	}
+
+	// Calculate pagination parameters
+	totalColumns := len(data.Columns)
+	totalRows := len(data.Rows)
+	totalColumnChunks := (totalColumns + maxColumnsPerPage - 1) / maxColumnsPerPage
+
+	// Calculate how many rows fit per page (considering headers and margins)
+	availableHeight := pageHeight - 100 - (2 * pg.config.MarginY) // Space for headers/footers
+	maxRowsPerPage := int(availableHeight / pg.config.TableRowHeight)
+
+	// Ensure minimum rows per page
+	if maxRowsPerPage < 5 {
+		maxRowsPerPage = 5
+	}
+
+	totalRowBatches := (totalRows + maxRowsPerPage - 1) / maxRowsPerPage
+
+	fmt.Printf("🔄 Pagination Strategy:\n")
+	fmt.Printf("   📊 Total data: %d columns × %d rows\n", totalColumns, totalRows)
+	fmt.Printf("   📄 Column chunks: %d (max %d cols per chunk)\n", totalColumnChunks, maxColumnsPerPage)
+	fmt.Printf("   📑 Row batches: %d (max %d rows per batch)\n", totalRowBatches, maxRowsPerPage)
+	fmt.Printf("   📋 Total pages: ~%d\n\n", totalColumnChunks*totalRowBatches)
+
+	isFirstOverallPage := true
+
+	// OUTER LOOP: Row batches
+	for rowBatchIndex := 0; rowBatchIndex < totalRowBatches; rowBatchIndex++ {
+		startRow := rowBatchIndex * maxRowsPerPage
+		endRow := startRow + maxRowsPerPage
+		if endRow > totalRows {
+			endRow = totalRows
+		}
+
+		fmt.Printf("🔢 Processing Row Batch %d: Rows %d-%d\n",
+			rowBatchIndex+1, startRow+1, endRow)
+
+		// Get row batch
+		rowBatch := data.Rows[startRow:endRow]
+
+		// INNER LOOP: Column chunks for this row batch
+		for columnChunkIndex := 0; columnChunkIndex < totalColumnChunks; columnChunkIndex++ {
+			startCol := columnChunkIndex * maxColumnsPerPage
+			endCol := startCol + maxColumnsPerPage
+			if endCol > totalColumns {
+				endCol = totalColumns
+			}
+
+			// fmt.Printf("   📄 Column Chunk %d: Columns %d-%d (%s to %s)\n",
+			// 	columnChunkIndex+1, startCol+1, endCol,
+			// 	data.Columns[startCol], data.Columns[endCol-1])
+
+			// Create subset of columns for this chunk
+			chunkColumns := make([]string, endCol-startCol)
+			copy(chunkColumns, data.Columns[startCol:endCol])
+
+			// Create subset of rows with only the columns for this chunk
+			chunkRows := make([]map[string]interface{}, len(rowBatch))
+			for i, originalRow := range rowBatch {
+				chunkRow := make(map[string]interface{})
+				for _, colName := range chunkColumns {
+					chunkRow[colName] = originalRow[colName]
+				}
+				chunkRows[i] = chunkRow
+			}
+
+			// Create the subset data
+			subsetData := &QueryData{
+				Columns: chunkColumns,
+				Rows:    chunkRows,
+			}
+
+			// Add new page for all chunks except the very first one
+			if !isFirstOverallPage {
+				pg.pdf.AddPage()
+			}
+			isFirstOverallPage = false
+
+			// Add page header with batch and chunk information
+			currentY := pg.config.MarginY
+
+			// Main header
+			pg.pdf.SetFont("arial", "", 14)
+			pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+			pg.pdf.SetXY(pg.config.MarginX, currentY)
+
+			if totalRowBatches == 1 {
+				// Single row batch - just show column info
+				pg.pdf.Cell(nil, fmt.Sprintf("Columns %d-%d of %d", startCol+1, endCol, totalColumns))
+			} else {
+				// Multiple row batches - show both row and column info
+				pg.pdf.Cell(nil, fmt.Sprintf("Rows %d-%d | Columns %d-%d of %d",
+					startRow+1, endRow, startCol+1, endCol, totalColumns))
+			}
+			currentY += 25
+
+			// Sub header
+			pg.pdf.SetFont("arial", "", 10)
+			pg.pdf.SetTextColor(100, 100, 100)
+			pg.pdf.SetXY(pg.config.MarginX, currentY)
+
+			if totalRowBatches == 1 {
+				pg.pdf.Cell(nil, fmt.Sprintf("Column Chunk %d of %d | From: %s → To: %s",
+					columnChunkIndex+1, totalColumnChunks, chunkColumns[0], chunkColumns[len(chunkColumns)-1]))
+			} else {
+				pg.pdf.Cell(nil, fmt.Sprintf("Row Batch %d of %d | Column Chunk %d of %d | %s → %s",
+					rowBatchIndex+1, totalRowBatches, columnChunkIndex+1, totalColumnChunks,
+					chunkColumns[0], chunkColumns[len(chunkColumns)-1]))
+			}
+			currentY += 20
+
+			// Add the table for this chunk - DISABLE internal row pagination
+			pg.addTableWithRowControl(subsetData, currentY, true) // Disable internal pagination
+		}
+	}
+
+	// Add final summary page
+	pg.pdf.AddPage()
+	pg.addDataSummaryPage(data, totalColumnChunks, totalRowBatches)
+}
+
+// Add summary page method
+func (pg *PDFGenerator) addDataSummaryPage(data *QueryData, totalColumnChunks, totalRowBatches int) {
+	currentY := pg.config.MarginY + 50
+
+	// Title
+	pg.pdf.SetFont("arial", "", 18)
+	pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+	pg.pdf.SetXY(pg.config.MarginX, currentY)
+	pg.pdf.Cell(nil, "📊 Data Summary")
+	currentY += 40
+
+	// Statistics box
+	boxHeight := 120.0
+	pg.pdf.SetFillColor(248, 249, 250)
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY, 400, boxHeight, "F")
+	pg.pdf.SetStrokeColor(200, 200, 200)
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY, 400, boxHeight, "D")
+
+	pg.pdf.SetFont("arial", "", 12)
+	pg.pdf.SetTextColor(0, 0, 0)
+
+	pg.pdf.SetXY(pg.config.MarginX+15, currentY+20)
+	pg.pdf.Cell(nil, fmt.Sprintf("📋 Total Columns: %d", len(data.Columns)))
+
+	pg.pdf.SetXY(pg.config.MarginX+15, currentY+40)
+	pg.pdf.Cell(nil, fmt.Sprintf("📑 Total Rows: %d", len(data.Rows)))
+
+	pg.pdf.SetXY(pg.config.MarginX+15, currentY+60)
+	pg.pdf.Cell(nil, fmt.Sprintf("📄 Column Chunks: %d", totalColumnChunks))
+
+	pg.pdf.SetXY(pg.config.MarginX+15, currentY+80)
+	pg.pdf.Cell(nil, fmt.Sprintf("🔢 Row Batches: %d", totalRowBatches))
+}
+
+// Update the main addSplitTable method to use the new pagination
+func (pg *PDFGenerator) addSplitTable(data *QueryData, startY float64, maxColumnsPerPage int) {
+	// Use the new two-level pagination method
+	pg.addSplitTableWithFullPagination(data, startY, maxColumnsPerPage)
+}
+
+// Add this method to split large tables across multiple pages
+// addSplitTable splits large tables across multiple pages horizontally
+// func (pg *PDFGenerator) addSplitTable(data *QueryData, startY float64, maxColumnsPerPage int) {
+// 	if data == nil || len(data.Columns) == 0 || len(data.Rows) == 0 {
+// 		pg.pdf.SetFont("arial", "", 10)
+// 		pg.pdf.SetTextColor(100, 100, 100)
+// 		pg.pdf.SetXY(pg.config.MarginX, startY)
+// 		pg.pdf.Cell(nil, "📭 No data returned.")
+// 		return
+// 	}
+
+// 	// If columns fit in one page, use regular table with pagination
+// 	if len(data.Columns) <= maxColumnsPerPage {
+// 		pg.addTableWithRowControl(data, startY, false) // Enable row pagination
+// 		return
+// 	}
+
+// 	// Calculate total chunks needed
+// 	totalColumns := len(data.Columns)
+// 	totalChunks := (totalColumns + maxColumnsPerPage - 1) / maxColumnsPerPage
+
+// 	fmt.Printf("🔄 Splitting %d columns into %d chunks of max %d columns each\n",
+// 		totalColumns, totalChunks, maxColumnsPerPage)
+
+// 	for chunkIndex := 0; chunkIndex < totalChunks; chunkIndex++ {
+// 		startCol := chunkIndex * maxColumnsPerPage
+// 		endCol := startCol + maxColumnsPerPage
+// 		if endCol > totalColumns {
+// 			endCol = totalColumns
+// 		}
+
+// 		fmt.Printf("   📄 Chunk %d: Columns %d-%d (%s to %s)\n",
+// 			chunkIndex+1, startCol+1, endCol,
+// 			data.Columns[startCol], data.Columns[endCol-1])
+
+// 		// Create subset of columns for this chunk
+// 		chunkColumns := make([]string, endCol-startCol)
+// 		copy(chunkColumns, data.Columns[startCol:endCol])
+
+// 		// Create subset of rows with only the columns for this chunk
+// 		chunkRows := make([]map[string]interface{}, len(data.Rows))
+// 		for i, originalRow := range data.Rows {
+// 			chunkRow := make(map[string]interface{})
+// 			for _, colName := range chunkColumns {
+// 				chunkRow[colName] = originalRow[colName]
+// 			}
+// 			chunkRows[i] = chunkRow
+// 		}
+
+// 		// Create the subset data
+// 		subsetData := &QueryData{
+// 			Columns: chunkColumns,
+// 			Rows:    chunkRows,
+// 		}
+
+// 		// Add new page for chunks after the first one
+// 		if chunkIndex > 0 {
+// 			pg.pdf.AddPage()
+
+// 			// Add chunk information header
+// 			currentY := pg.config.MarginY
+
+// 			pg.pdf.SetFont("arial", "", 14)
+// 			pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+// 			pg.pdf.SetXY(pg.config.MarginX, currentY)
+// 			pg.pdf.Cell(nil, fmt.Sprintf("Columns %d-%d of %d", startCol+1, endCol, totalColumns))
+// 			currentY += 25
+
+// 			pg.pdf.SetFont("arial", "", 10)
+// 			pg.pdf.SetTextColor(100, 100, 100)
+// 			pg.pdf.SetXY(pg.config.MarginX, currentY)
+// 			pg.pdf.Cell(nil, fmt.Sprintf("Chunk %d of %d | From: %s → To: %s",
+// 				chunkIndex+1, totalChunks, chunkColumns[0], chunkColumns[len(chunkColumns)-1]))
+// 			currentY += 20
+
+// 			// Add the table for this chunk - DISABLE row pagination within chunks
+// 			pg.addTableWithRowControl(subsetData, currentY, true) // Disable row pagination
+// 		} else {
+// 			// First chunk - add on current page with info
+// 			pg.pdf.SetFont("arial", "", 10)
+// 			pg.pdf.SetTextColor(100, 100, 100)
+// 			pg.pdf.SetXY(pg.config.MarginX, startY-15)
+// 			pg.pdf.Cell(nil, fmt.Sprintf("📊 Showing columns 1-%d of %d total | From: %s → To: %s",
+// 				endCol, totalColumns, chunkColumns[0], chunkColumns[len(chunkColumns)-1]))
+
+// 			// DISABLE row pagination for the first chunk too
+// 			pg.addTableWithRowControl(subsetData, startY, true) // Disable row pagination
+// 		}
+// 	}
+// }
+
+// debugColumnSplit - temporary function to verify column splitting
+func debugColumnSplit(data *QueryData, maxColumnsPerPage int) {
+	fmt.Printf("\n=== DEBUG: Column Splitting ===\n")
+	fmt.Printf("Total columns: %d\n", len(data.Columns))
+	fmt.Printf("Max per page: %d\n", maxColumnsPerPage)
+
+	totalChunks := (len(data.Columns) + maxColumnsPerPage - 1) / maxColumnsPerPage
+	fmt.Printf("Total chunks: %d\n", totalChunks)
+
+	for chunkIndex := 0; chunkIndex < totalChunks; chunkIndex++ {
+		startCol := chunkIndex * maxColumnsPerPage
+		endCol := startCol + maxColumnsPerPage
+		if endCol > len(data.Columns) {
+			endCol = len(data.Columns)
+		}
+
+		fmt.Printf("\nChunk %d:\n", chunkIndex+1)
+		fmt.Printf("  Range: %d-%d\n", startCol+1, endCol)
+		fmt.Printf("  First column: %s\n", data.Columns[startCol])
+		fmt.Printf("  Last column: %s\n", data.Columns[endCol-1])
+		fmt.Printf("  Columns in chunk: %v\n", data.Columns[startCol:endCol][:3]) // Show first 3
+	}
+	fmt.Printf("================================\n\n")
 }
 
 // GenerateQueryResultsPDF creates a PDF from query results - UPDATED VERSION.
 func (pg *PDFGenerator) GenerateQueryResultsPDF(results []QueryResult) ([]byte, error) {
 	pg.pdf = &gopdf.GoPdf{}
+	// Change to landscape orientation
 	pg.pdf.Start(gopdf.Config{
-		PageSize: *gopdf.PageSizeA4,
+		PageSize: *gopdf.PageSizeA4Landscape, // This is the key change
 		Unit:     gopdf.UnitPT,
 	})
 
@@ -443,6 +678,227 @@ func (pg *PDFGenerator) GenerateQueryResultsPDF(results []QueryResult) ([]byte, 
 	return buffer.Bytes(), nil
 }
 
+// Add this helper method to measure actual text width
+func (pg *PDFGenerator) measureTextWidth(text string) float64 {
+	// gopdf has a GetStringWidth method to measure actual text width
+	width, err := pg.pdf.MeasureTextWidth(text)
+	if err != nil {
+		// Fallback to rough estimation if measurement fails
+		return float64(len(text)) * float64(pg.config.FontSize) * 0.6
+	}
+	return width
+}
+
+// Add this method to properly truncate text based on actual width
+func (pg *PDFGenerator) truncateTextToFit(text string, maxWidth float64) string {
+	if text == "" {
+		return text
+	}
+
+	// Check if full text fits
+	fullWidth := pg.measureTextWidth(text)
+	if fullWidth <= maxWidth {
+		return text
+	}
+
+	// Binary search for optimal length
+	ellipsis := "..."
+	ellipsisWidth := pg.measureTextWidth(ellipsis)
+	availableWidth := maxWidth - ellipsisWidth
+
+	if availableWidth <= 0 {
+		return ellipsis
+	}
+
+	// Use binary search to find the maximum characters that fit
+	left, right := 0, len(text)
+	bestFit := ""
+
+	for left <= right {
+		mid := (left + right) / 2
+		testText := text[:mid]
+		testWidth := pg.measureTextWidth(testText)
+
+		if testWidth <= availableWidth {
+			bestFit = testText
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+
+	if bestFit == "" {
+		return ellipsis
+	}
+
+	return bestFit + ellipsis
+}
+
+// Updated drawTableRowsWithControl method with proper text truncation
+func (pg *PDFGenerator) drawTableRowsWithControl(data *QueryData, colWidths []float64, startY float64, disableRowPagination bool) {
+	if len(data.Rows) == 0 {
+		return
+	}
+
+	rowHeight := pg.config.TableRowHeight
+	currentY := startY
+	pageNum := 1
+
+	bottomMargin := pg.config.MarginY
+	maxYPosition := pageHeight - bottomMargin - 20
+
+	// Set row style
+	pg.pdf.SetTextColor(0, 0, 0)
+	pg.pdf.SetFont("arial", "", pg.config.FontSize)
+	pg.pdf.SetStrokeColor(200, 200, 200)
+	pg.pdf.SetLineWidth(0.3)
+
+	totalWidth := 0.0
+	for _, w := range colWidths {
+		totalWidth += w
+	}
+
+	for rowIdx, row := range data.Rows {
+		// Page break logic (unchanged)
+		if !disableRowPagination && currentY+rowHeight > maxYPosition {
+			pg.addPageNumber(pageNum)
+			pageNum++
+			pg.pdf.AddPage()
+			currentY = pg.config.MarginY
+			currentY = pg.drawTableHeaders(data.Columns, colWidths, currentY)
+			pg.pdf.SetTextColor(0, 0, 0)
+		}
+
+		// Alternate row colors
+		if rowIdx%2 == 1 {
+			pg.pdf.SetFillColor(248, 249, 250)
+			pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY, totalWidth, rowHeight, "F")
+		}
+
+		// Draw row borders
+		pg.pdf.Line(pg.config.MarginX, currentY+rowHeight, pg.config.MarginX+totalWidth, currentY+rowHeight)
+
+		// Draw cell content
+		currentX := pg.config.MarginX
+		for i, col := range data.Columns {
+			// Vertical border
+			if i > 0 {
+				pg.pdf.Line(currentX, currentY, currentX, currentY+rowHeight)
+			}
+
+			// Cell content
+			cellValue := "NULL"
+			if val := row[col]; val != nil {
+				cellValue = fmt.Sprintf("%v", val)
+			}
+
+			// IMPROVED: Use proper text width measurement for truncation
+			cellPadding := 6.0 // Left + right padding
+			availableWidth := colWidths[i] - cellPadding
+
+			// Truncate text to fit available width properly
+			displayValue := pg.truncateTextToFit(cellValue, availableWidth)
+
+			// Position text with padding
+			pg.pdf.SetXY(currentX+3, currentY+8) // 3pt left padding
+			pg.pdf.Cell(nil, displayValue)
+
+			currentX += colWidths[i]
+		}
+
+		currentY += rowHeight
+	}
+
+	// Draw final vertical borders for the table
+	pg.pdf.Line(pg.config.MarginX, startY, pg.config.MarginX, currentY)
+	pg.pdf.Line(pg.config.MarginX+totalWidth, startY, pg.config.MarginX+totalWidth, currentY)
+
+	// Add summary (unchanged)
+	if !disableRowPagination && currentY+30 > maxYPosition {
+		pg.addPageNumber(pageNum)
+		pageNum++
+		pg.pdf.AddPage()
+		currentY = pg.config.MarginY
+	} else {
+		currentY += 15
+	}
+
+	pg.pdf.SetFont("arial", "", 9)
+	pg.pdf.SetTextColor(100, 100, 100)
+	pg.pdf.SetXY(pg.config.MarginX, currentY)
+	pg.pdf.Cell(nil, fmt.Sprintf("📊 Total rows: %d", len(data.Rows)))
+
+	if !disableRowPagination {
+		pg.addPageNumber(pageNum)
+	}
+}
+
+// Also update the header drawing method
+func (pg *PDFGenerator) drawTableHeaders(columns []string, colWidths []float64, startY float64) float64 {
+	headerHeight := pg.config.TableRowHeight
+
+	// Set header style
+	pg.pdf.SetFillColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+	pg.pdf.SetTextColor(255, 255, 255)
+	fontSize := pg.config.FontSize
+	if len(columns) > 50 {
+		fontSize = 7
+	}
+	pg.pdf.SetFont("arial", "", fontSize+1)
+
+	// Draw header background
+	totalWidth := 0.0
+	for _, w := range colWidths {
+		totalWidth += w
+	}
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, startY, totalWidth, headerHeight, "F")
+
+	// Draw header borders
+	pg.pdf.SetStrokeColor(100, 100, 100)
+	pg.pdf.SetLineWidth(0.5)
+
+	currentX := pg.config.MarginX
+	for i, col := range columns {
+		if i > 0 {
+			pg.pdf.Line(currentX, startY, currentX, startY+headerHeight)
+		}
+
+		// IMPROVED: Header text with proper width measurement
+		headerPadding := 4.0
+		availableWidth := colWidths[i] - headerPadding
+
+		// Truncate header text properly
+		displayCol := pg.truncateTextToFit(col, availableWidth)
+
+		pg.pdf.SetXY(currentX+2, startY+5)
+		pg.pdf.Cell(nil, displayCol)
+		currentX += colWidths[i]
+	}
+
+	// Draw horizontal borders
+	pg.pdf.Line(pg.config.MarginX, startY, pg.config.MarginX+totalWidth, startY)
+	pg.pdf.Line(pg.config.MarginX, startY+headerHeight, pg.config.MarginX+totalWidth, startY+headerHeight)
+
+	return startY + headerHeight
+}
+
+// Option 1: Add a parameter to control row pagination
+func (pg *PDFGenerator) addTableWithRowControl(data *QueryData, startY float64, disableRowPagination bool) {
+	if len(data.Columns) == 0 || len(data.Rows) == 0 {
+		return
+	}
+
+	// Calculate optimal column widths
+	colWidths := pg.calculateColumnWidths(data)
+	currentY := startY
+
+	// Draw table headers
+	currentY = pg.drawTableHeaders(data.Columns, colWidths, currentY)
+
+	// Draw table rows with optional pagination control
+	pg.drawTableRowsWithControl(data, colWidths, currentY, disableRowPagination)
+}
+
 // addQueryResultPage adds a page for each query result - IMPROVED VERSION.
 func (pg *PDFGenerator) addQueryResultPage(result QueryResult, queryNum int) {
 	pg.pdf.AddPage()
@@ -453,23 +909,13 @@ func (pg *PDFGenerator) addQueryResultPage(result QueryResult, queryNum int) {
 	pg.pdf.SetFont("arial", "", 16)
 	pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
 	pg.pdf.SetXY(pg.config.MarginX, currentY)
-	pg.pdf.Cell(nil, fmt.Sprintf("Query %d Results", queryNum))
+	//pg.pdf.Cell(nil, fmt.Sprintf("Query %d Results", queryNum))
 	currentY += 30
 
 	// Status line with icons
 	pg.pdf.SetFont("arial", "", 11)
 	pg.pdf.SetTextColor(80, 80, 80)
 	pg.pdf.SetXY(pg.config.MarginX, currentY)
-
-	statusIcon := "✅"
-	if result.Status != "success" {
-		statusIcon = "❌"
-	}
-
-	statusText := fmt.Sprintf("%s Executed: %s | Status: %s | Duration: %s",
-		statusIcon, result.Timestamp, result.Status, result.Duration)
-	pg.pdf.Cell(nil, statusText)
-	currentY += 25
 
 	// Query text in a box
 	if pg.config.ShowQuery {
@@ -482,11 +928,11 @@ func (pg *PDFGenerator) addQueryResultPage(result QueryResult, queryNum int) {
 		pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY,
 			535-pg.config.MarginX, queryBoxHeight, "F")
 
-		// Draw query box border
-		pg.pdf.SetStrokeColor(200, 200, 200)
-		pg.pdf.SetLineWidth(0.5)
-		pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY,
-			535-pg.config.MarginX, queryBoxHeight, "D")
+		// // Draw query box border
+		// pg.pdf.SetStrokeColor(200, 200, 200)
+		// pg.pdf.SetLineWidth(0.5)
+		// pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY,
+		// 	535-pg.config.MarginX, queryBoxHeight, "D")
 
 		// Query text
 		pg.pdf.SetXY(pg.config.MarginX+5, currentY+8)
@@ -528,36 +974,44 @@ func (pg *PDFGenerator) addQueryResultPage(result QueryResult, queryNum int) {
 		return
 	}
 
-	// Add properly formatted table
-	pg.addTable(result.Data, currentY)
+	// *** ADD DEBUG OUTPUT ***
+	fmt.Printf("\n🔍 Processing Query %d with %d columns\n", queryNum, len(result.Data.Columns))
+	if len(result.Data.Columns) > 0 {
+		fmt.Printf("   First column: %s\n", result.Data.Columns[0])
+		fmt.Printf("   Last column: %s\n", result.Data.Columns[len(result.Data.Columns)-1])
+	}
+
+	// WITH THIS:
+	// Add split table for many columns (153 columns)
+	maxColumnsPerPage := 16 // Adjust based on your needs
+	debugColumnSplit(result.Data, maxColumnsPerPage)
+	pg.addSplitTable(result.Data, currentY, maxColumnsPerPage)
 }
 
-// calculateColumnWidths determines optimal column widths - IMPROVED.
+// Updated calculateColumnWidths to handle 153 columns
 func (pg *PDFGenerator) calculateColumnWidths(data *QueryData) []float64 {
-	pageWidth := 595.0
-	usableWidth := pageWidth - (2 * pg.config.MarginX) - 10 // Safety margin
+	// Use landscape page width
+	usableWidth := pageWidth - (2 * pg.config.MarginX) - 10 // ~800pt available
 
 	numCols := len(data.Columns)
 	if numCols == 0 {
 		return []float64{}
 	}
 
-	// Start with equal distribution
-	//baseWidth := usableWidth / float64(numCols)
-	colWidths := make([]float64, numCols)
+	// For many columns, use smaller minimum width
+	minWidth := 35.0 // Reduced from 60.0
+	maxWidth := 80.0 // Reduced from 150.0
 
-	// Minimum and maximum column widths
-	minWidth := 60.0
-	maxWidth := 150.0
+	colWidths := make([]float64, numCols)
 
 	// Calculate content-based widths
 	for i, col := range data.Columns {
-		// Start with header width
-		headerWidth := float64(len(col)*7) + 10 // 7 pts per char + padding
+		// Start with header width (smaller font consideration)
+		headerWidth := float64(len(col)*5) + 8 // Reduced multiplier
 
-		// Check content width (sample first 5 rows)
+		// Check content width (sample first 3 rows for performance)
 		maxContentWidth := headerWidth
-		sampleSize := 5
+		sampleSize := 3 // Reduced from 5 for performance
 		if len(data.Rows) < sampleSize {
 			sampleSize = len(data.Rows)
 		}
@@ -565,7 +1019,7 @@ func (pg *PDFGenerator) calculateColumnWidths(data *QueryData) []float64 {
 		for j := 0; j < sampleSize; j++ {
 			if val := data.Rows[j][col]; val != nil {
 				contentStr := fmt.Sprintf("%v", val)
-				contentWidth := float64(len(contentStr)*6) + 10 // 6 pts per char + padding
+				contentWidth := float64(len(contentStr)*4) + 8 // Reduced multiplier
 				if contentWidth > maxContentWidth {
 					maxContentWidth = contentWidth
 				}
@@ -582,7 +1036,7 @@ func (pg *PDFGenerator) calculateColumnWidths(data *QueryData) []float64 {
 		}
 	}
 
-	// If total width exceeds available space, scale down
+	// Scale down to fit available width
 	totalWidth := 0.0
 	for _, w := range colWidths {
 		totalWidth += w
@@ -593,8 +1047,8 @@ func (pg *PDFGenerator) calculateColumnWidths(data *QueryData) []float64 {
 		for i := range colWidths {
 			colWidths[i] *= scale
 			// Ensure still above minimum after scaling
-			if colWidths[i] < minWidth {
-				colWidths[i] = minWidth
+			if colWidths[i] < minWidth/2 { // Allow even smaller after scaling
+				colWidths[i] = minWidth / 2
 			}
 		}
 	}
@@ -631,7 +1085,7 @@ func (pg *PDFGenerator) addTitlePage(queryCount int) {
 	pg.pdf.SetTextColor(0, 0, 0)
 
 	pg.pdf.SetXY(pg.config.MarginX+15, boxY+20)
-	pg.pdf.Cell(nil, fmt.Sprintf("📊 Total Queries: %d", queryCount))
+	//pg.pdf.Cell(nil, fmt.Sprintf("📊 Total Queries: %d", queryCount))
 
 	if pg.config.ShowTimestamp {
 		pg.pdf.SetXY(pg.config.MarginX+15, boxY+40)
@@ -827,11 +1281,16 @@ func main() {
 	outputFile := "query_results.json"
 
 	// PDF options
+	// PDF options with landscape-optimized config
 	generatePDF := true
-	pdfOutputFile := "query_results.pdf"
+	pdfOutputFile := "query_results_landscape_split.pdf"
 	pdfConfig := DefaultPDFConfig()
 	pdfConfig.CompanyName = "Rahul's Database Reports"
-	pdfConfig.Title = "SQL Query Execution Report"
+	pdfConfig.Title = "SQL Query Execution Report (153 Columns)"
+	pdfConfig.FontSize = 7          // Small font for readability
+	pdfConfig.TableRowHeight = 15.0 // Compact rows
+	pdfConfig.MarginX = 5.0         // Minimal margins
+	pdfConfig.MarginY = 15.0
 
 	config, ok := dbConfigs[selectedDB]
 	if !ok {
