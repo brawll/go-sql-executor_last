@@ -221,7 +221,189 @@ func downloadFont(fontPath string) error {
 	return nil
 }
 
-// GenerateQueryResultsPDF creates a PDF from query results.
+// addTable creates a properly formatted table for the query data.
+func (pg *PDFGenerator) addTable(data *QueryData, startY float64) {
+	if len(data.Columns) == 0 || len(data.Rows) == 0 {
+		return
+	}
+
+	// Calculate optimal column widths based on content
+	colWidths := pg.calculateColumnWidths(data)
+	currentY := startY
+
+	// Draw table headers
+	currentY = pg.drawTableHeaders(data.Columns, colWidths, currentY)
+
+	// Draw table rows
+	pg.drawTableRows(data, colWidths, currentY)
+}
+
+// drawTableHeaders draws the table header row.
+func (pg *PDFGenerator) drawTableHeaders(columns []string, colWidths []float64, startY float64) float64 {
+	headerHeight := pg.config.TableRowHeight
+
+	// Set header style
+	pg.pdf.SetFillColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+	pg.pdf.SetTextColor(255, 255, 255)
+	pg.pdf.SetFont("arial", "", pg.config.FontSize+1) // Slightly larger for headers
+
+	// Draw header background
+	totalWidth := 0.0
+	for _, w := range colWidths {
+		totalWidth += w
+	}
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, startY, totalWidth, headerHeight, "F")
+
+	// Draw header borders
+	pg.pdf.SetStrokeColor(100, 100, 100)
+	pg.pdf.SetLineWidth(0.5)
+
+	currentX := pg.config.MarginX
+	for i, col := range columns {
+		// Vertical border
+		if i > 0 {
+			pg.pdf.Line(currentX, startY, currentX, startY+headerHeight)
+		}
+
+		// Header text
+		pg.pdf.SetXY(currentX+3, startY+8) // Padding
+
+		// Truncate long column names
+		colName := col
+		maxChars := int(colWidths[i]/6) - 2 // Approximate characters that fit
+		if len(colName) > maxChars && maxChars > 3 {
+			colName = colName[:maxChars-3] + "..."
+		}
+
+		pg.pdf.Cell(nil, colName)
+		currentX += colWidths[i]
+	}
+
+	// Draw horizontal borders
+	pg.pdf.Line(pg.config.MarginX, startY, pg.config.MarginX+totalWidth, startY)                           // Top
+	pg.pdf.Line(pg.config.MarginX, startY+headerHeight, pg.config.MarginX+totalWidth, startY+headerHeight) // Bottom
+
+	return startY + headerHeight
+}
+
+// drawTableRows draws all the table data rows - FIXED VERSION WITH PAGE NUMBERS
+func (pg *PDFGenerator) drawTableRows(data *QueryData, colWidths []float64, startY float64) {
+	if len(data.Rows) == 0 {
+		return
+	}
+
+	rowHeight := pg.config.TableRowHeight
+	currentY := startY
+	pageNum := 1 // Track page numbers
+
+	// A4 page dimensions: 595.35 x 841.995 points
+	const pageHeight = 841.995
+	bottomMargin := pg.config.MarginY
+	maxYPosition := pageHeight - bottomMargin - 20 // Extra padding for safety
+
+	// Set row style
+	pg.pdf.SetTextColor(0, 0, 0)
+	pg.pdf.SetFont("arial", "", pg.config.FontSize)
+	pg.pdf.SetStrokeColor(200, 200, 200)
+	pg.pdf.SetLineWidth(0.3)
+
+	totalWidth := 0.0
+	for _, w := range colWidths {
+		totalWidth += w
+	}
+
+	for rowIdx, row := range data.Rows {
+		// Check if current row would exceed page boundaries
+		if currentY+rowHeight > maxYPosition {
+			// Add page number to current page before moving to next
+			pg.addPageNumber(pageNum)
+			pageNum++
+
+			// Add new page
+			pg.pdf.AddPage()
+			currentY = pg.config.MarginY
+
+			// Redraw headers on new page
+			currentY = pg.drawTableHeaders(data.Columns, colWidths, currentY)
+			pg.pdf.SetTextColor(0, 0, 0) // Reset to black text after headers
+		}
+
+		// Alternate row colors
+		if rowIdx%2 == 1 {
+			pg.pdf.SetFillColor(248, 249, 250)
+			pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY, totalWidth, rowHeight, "F")
+		}
+
+		// Draw row borders
+		pg.pdf.Line(pg.config.MarginX, currentY+rowHeight, pg.config.MarginX+totalWidth, currentY+rowHeight)
+
+		// Draw cell content
+		currentX := pg.config.MarginX
+		for i, col := range data.Columns {
+			// Vertical border
+			if i > 0 {
+				pg.pdf.Line(currentX, currentY, currentX, currentY+rowHeight)
+			}
+
+			// Cell content
+			cellValue := "NULL"
+			if val := row[col]; val != nil {
+				cellValue = fmt.Sprintf("%v", val)
+			}
+
+			// Truncate text to fit column
+			maxChars := int(colWidths[i]/6) - 2
+			if len(cellValue) > maxChars && maxChars > 3 {
+				cellValue = cellValue[:maxChars-3] + "..."
+			}
+
+			// Position text
+			pg.pdf.SetXY(currentX+3, currentY+8) // Padding
+			pg.pdf.Cell(nil, cellValue)
+
+			currentX += colWidths[i]
+		}
+
+		// Move to next row position
+		currentY += rowHeight
+	}
+
+	// Draw final vertical borders for the table
+	pg.pdf.Line(pg.config.MarginX, startY, pg.config.MarginX, currentY)                       // Left border
+	pg.pdf.Line(pg.config.MarginX+totalWidth, startY, pg.config.MarginX+totalWidth, currentY) // Right border
+
+	// Add summary
+	if currentY+30 > maxYPosition {
+		// Add page number to current page before moving to next
+		pg.addPageNumber(pageNum)
+		pageNum++
+
+		pg.pdf.AddPage()
+		currentY = pg.config.MarginY
+	} else {
+		currentY += 15
+	}
+
+	pg.pdf.SetFont("arial", "", 9)
+	pg.pdf.SetTextColor(100, 100, 100)
+	pg.pdf.SetXY(pg.config.MarginX, currentY)
+	pg.pdf.Cell(nil, fmt.Sprintf("📊 Total rows: %d", len(data.Rows)))
+
+	// Add page number to final page
+	pg.addPageNumber(pageNum)
+}
+
+// Add page numbers
+func (pg *PDFGenerator) addPageNumber(pageNum int) {
+	// A4 page height in points
+	const pageHeight = 841.995
+	pg.pdf.SetFont("arial", "", 8)
+	pg.pdf.SetTextColor(150, 150, 150)
+	pg.pdf.SetXY(pg.config.MarginX, pageHeight-20)
+	pg.pdf.Cell(nil, fmt.Sprintf("Page %d", pageNum))
+}
+
+// GenerateQueryResultsPDF creates a PDF from query results - UPDATED VERSION.
 func (pg *PDFGenerator) GenerateQueryResultsPDF(results []QueryResult) ([]byte, error) {
 	pg.pdf = &gopdf.GoPdf{}
 	pg.pdf.Start(gopdf.Config{
@@ -234,8 +416,8 @@ func (pg *PDFGenerator) GenerateQueryResultsPDF(results []QueryResult) ([]byte, 
 		Title:    pg.config.Title,
 		Author:   pg.config.Author,
 		Subject:  pg.config.Subject,
-		Creator:  "SQL Executor",
-		Producer: "GoPDF",
+		Creator:  "SQL Executor v2.0",
+		Producer: "GoPDF Enhanced",
 	})
 
 	// Setup fonts
@@ -261,81 +443,79 @@ func (pg *PDFGenerator) GenerateQueryResultsPDF(results []QueryResult) ([]byte, 
 	return buffer.Bytes(), nil
 }
 
-// addTitlePage creates a title page for the PDF.
-func (pg *PDFGenerator) addTitlePage(queryCount int) {
-	pg.pdf.AddPage()
-	pg.pdf.SetFont("arial", "", 24)
-
-	// Title
-	pg.pdf.SetXY(pg.config.MarginX, 100)
-	pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
-	pg.pdf.Cell(nil, pg.config.Title)
-
-	// Company name
-	pg.pdf.SetFont("arial", "", 16)
-	pg.pdf.SetXY(pg.config.MarginX, 140)
-	pg.pdf.SetTextColor(100, 100, 100)
-	pg.pdf.Cell(nil, pg.config.CompanyName)
-
-	// Report info
-	pg.pdf.SetFont("arial", "", 12)
-	pg.pdf.SetTextColor(0, 0, 0)
-
-	pg.pdf.SetXY(pg.config.MarginX, 200)
-	pg.pdf.Cell(nil, fmt.Sprintf("Total Queries: %d", queryCount))
-
-	if pg.config.ShowTimestamp {
-		pg.pdf.SetXY(pg.config.MarginX, 220)
-		pg.pdf.Cell(nil, fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")))
-	}
-
-	// Add a horizontal line
-	pg.pdf.SetLineWidth(1)
-	pg.pdf.SetStrokeColor(200, 200, 200)
-	pg.pdf.Line(pg.config.MarginX, 250, 565, 250)
-}
-
-// addQueryResultPage adds a page for each query result.
+// addQueryResultPage adds a page for each query result - IMPROVED VERSION.
 func (pg *PDFGenerator) addQueryResultPage(result QueryResult, queryNum int) {
 	pg.pdf.AddPage()
 
 	currentY := pg.config.MarginY
 
-	// Query header
-	pg.pdf.SetFont("arial", "", 14)
+	// Query header with better styling
+	pg.pdf.SetFont("arial", "", 16)
 	pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
 	pg.pdf.SetXY(pg.config.MarginX, currentY)
 	pg.pdf.Cell(nil, fmt.Sprintf("Query %d Results", queryNum))
-	currentY += 25
+	currentY += 30
 
-	// Timestamp and status
-	pg.pdf.SetFont("arial", "", 10)
-	pg.pdf.SetTextColor(100, 100, 100)
+	// Status line with icons
+	pg.pdf.SetFont("arial", "", 11)
+	pg.pdf.SetTextColor(80, 80, 80)
 	pg.pdf.SetXY(pg.config.MarginX, currentY)
-	pg.pdf.Cell(nil, fmt.Sprintf("Executed: %s | Status: %s | Duration: %s",
-		result.Timestamp, result.Status, result.Duration))
-	currentY += 20
 
-	// Query text
-	if pg.config.ShowQuery && result.Status == "success" {
-		pg.pdf.SetFont("arial", "", 9)
-		pg.pdf.SetTextColor(0, 0, 0)
-		pg.pdf.SetXY(pg.config.MarginX, currentY)
-
-		queryText := result.Query
-		if len(queryText) > 80 {
-			queryText = queryText[:80] + "..."
-		}
-		pg.pdf.Cell(nil, fmt.Sprintf("SQL: %s", queryText))
-		currentY += 20
+	statusIcon := "✅"
+	if result.Status != "success" {
+		statusIcon = "❌"
 	}
 
-	// Handle errors
+	statusText := fmt.Sprintf("%s Executed: %s | Status: %s | Duration: %s",
+		statusIcon, result.Timestamp, result.Status, result.Duration)
+	pg.pdf.Cell(nil, statusText)
+	currentY += 25
+
+	// Query text in a box
+	if pg.config.ShowQuery {
+		pg.pdf.SetFont("arial", "", 9)
+		pg.pdf.SetTextColor(0, 0, 0)
+
+		// Draw query box background
+		queryBoxHeight := 25.0
+		pg.pdf.SetFillColor(250, 250, 250)
+		pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY,
+			535-pg.config.MarginX, queryBoxHeight, "F")
+
+		// Draw query box border
+		pg.pdf.SetStrokeColor(200, 200, 200)
+		pg.pdf.SetLineWidth(0.5)
+		pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY,
+			535-pg.config.MarginX, queryBoxHeight, "D")
+
+		// Query text
+		pg.pdf.SetXY(pg.config.MarginX+5, currentY+8)
+		queryText := result.Query
+		maxQueryLen := 100
+		if len(queryText) > maxQueryLen {
+			queryText = queryText[:maxQueryLen-3] + "..."
+		}
+		pg.pdf.Cell(nil, fmt.Sprintf("SQL: %s", queryText))
+		currentY += queryBoxHeight + 15
+	}
+
+	// Handle errors with better formatting
 	if result.Error != "" {
 		pg.pdf.SetFont("arial", "", 10)
 		pg.pdf.SetTextColor(220, 20, 20)
-		pg.pdf.SetXY(pg.config.MarginX, currentY)
-		pg.pdf.Cell(nil, fmt.Sprintf("Error: %s", result.Error))
+
+		// Error box
+		errorBoxHeight := 30.0
+		pg.pdf.SetFillColor(255, 245, 245)
+		pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY,
+			535-pg.config.MarginX, errorBoxHeight, "F")
+
+		pg.pdf.SetXY(pg.config.MarginX+5, currentY+10)
+		errorText := result.Error
+		if len(errorText) > 80 {
+			errorText = errorText[:77] + "..."
+		}
+		pg.pdf.Cell(nil, fmt.Sprintf("❌ Error: %s", errorText))
 		return
 	}
 
@@ -344,121 +524,127 @@ func (pg *PDFGenerator) addQueryResultPage(result QueryResult, queryNum int) {
 		pg.pdf.SetFont("arial", "", 10)
 		pg.pdf.SetTextColor(100, 100, 100)
 		pg.pdf.SetXY(pg.config.MarginX, currentY)
-		pg.pdf.Cell(nil, "No data returned.")
+		pg.pdf.Cell(nil, "📭 No data returned.")
 		return
 	}
 
-	// Add table
-	pg.simpleAddTable(result.Data, currentY+10)
+	// Add properly formatted table
+	pg.addTable(result.Data, currentY)
 }
 
-// addTable creates a table for the query data.
-func (pg *PDFGenerator) addTable(data *QueryData, startY float64) {
-	if len(data.Columns) == 0 || len(data.Rows) == 0 {
-		return
-	}
-
+// calculateColumnWidths determines optimal column widths - IMPROVED.
+func (pg *PDFGenerator) calculateColumnWidths(data *QueryData) []float64 {
 	pageWidth := 595.0
-	availableWidth := pageWidth - (2 * pg.config.MarginX)
-	colWidth := availableWidth / float64(len(data.Columns))
+	usableWidth := pageWidth - (2 * pg.config.MarginX) - 10 // Safety margin
 
-	maxColWidth := 120.0
-	if colWidth > maxColWidth {
-		colWidth = maxColWidth
+	numCols := len(data.Columns)
+	if numCols == 0 {
+		return []float64{}
 	}
 
-	currentY := startY
+	// Start with equal distribution
+	//baseWidth := usableWidth / float64(numCols)
+	colWidths := make([]float64, numCols)
 
-	// Table headers
-	pg.pdf.SetFillColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
-	pg.pdf.SetTextColor(255, 255, 255)
-	pg.pdf.SetFont("arial", "", pg.config.FontSize)
+	// Minimum and maximum column widths
+	minWidth := 60.0
+	maxWidth := 150.0
 
+	// Calculate content-based widths
 	for i, col := range data.Columns {
-		x := pg.config.MarginX + (float64(i) * colWidth)
-		pg.pdf.SetXY(x, currentY)
+		// Start with header width
+		headerWidth := float64(len(col)*7) + 10 // 7 pts per char + padding
 
-		pg.pdf.RectFromUpperLeftWithStyle(x, currentY, colWidth, pg.config.TableRowHeight, "F")
-		pg.pdf.SetXY(x+2, currentY+7)
-
-		colName := col
-		if len(colName) > 15 {
-			colName = colName[:12] + "..."
+		// Check content width (sample first 5 rows)
+		maxContentWidth := headerWidth
+		sampleSize := 5
+		if len(data.Rows) < sampleSize {
+			sampleSize = len(data.Rows)
 		}
-		pg.pdf.Cell(nil, colName)
-	}
 
-	currentY += pg.config.TableRowHeight
-
-	// Table rows
-	pg.pdf.SetTextColor(0, 0, 0)
-	rowCount := 0
-	maxRowsPerPage := 25
-
-	for _, row := range data.Rows {
-		if rowCount >= maxRowsPerPage {
-			pg.pdf.AddPage()
-			currentY = pg.config.MarginY
-			rowCount = 0
-
-			// Re-add headers
-			pg.pdf.SetFillColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
-			pg.pdf.SetTextColor(255, 255, 255)
-
-			for i, col := range data.Columns {
-				x := pg.config.MarginX + (float64(i) * colWidth)
-				pg.pdf.SetXY(x, currentY)
-				pg.pdf.RectFromUpperLeftWithStyle(x, currentY, colWidth, pg.config.TableRowHeight, "F")
-				pg.pdf.SetXY(x+2, currentY+7)
-
-				colName := col
-				if len(colName) > 15 {
-					colName = colName[:12] + "..."
+		for j := 0; j < sampleSize; j++ {
+			if val := data.Rows[j][col]; val != nil {
+				contentStr := fmt.Sprintf("%v", val)
+				contentWidth := float64(len(contentStr)*6) + 10 // 6 pts per char + padding
+				if contentWidth > maxContentWidth {
+					maxContentWidth = contentWidth
 				}
-				pg.pdf.Cell(nil, colName)
-			}
-			currentY += pg.config.TableRowHeight
-			pg.pdf.SetTextColor(0, 0, 0)
-		}
-
-		// Alternate row colors
-		if rowCount%2 == 1 {
-			pg.pdf.SetFillColor(248, 249, 250)
-			for i := range data.Columns {
-				x := pg.config.MarginX + (float64(i) * colWidth)
-				pg.pdf.RectFromUpperLeftWithStyle(x, currentY, colWidth, pg.config.TableRowHeight, "F")
 			}
 		}
 
-		// Add row data
-		for i, col := range data.Columns {
-			x := pg.config.MarginX + (float64(i) * colWidth)
-			pg.pdf.SetXY(x+2, currentY+7)
-
-			cellValue := ""
-			if val := row[col]; val != nil {
-				cellValue = fmt.Sprintf("%v", val)
-			} else {
-				cellValue = "NULL"
-			}
-
-			if len(cellValue) > 20 {
-				cellValue = cellValue[:17] + "..."
-			}
-
-			pg.pdf.Cell(nil, cellValue)
+		// Apply constraints
+		if maxContentWidth < minWidth {
+			colWidths[i] = minWidth
+		} else if maxContentWidth > maxWidth {
+			colWidths[i] = maxWidth
+		} else {
+			colWidths[i] = maxContentWidth
 		}
-
-		currentY += pg.config.TableRowHeight
-		rowCount++
 	}
 
-	// Add row count summary
-	currentY += 10
-	pg.pdf.SetFont("arial", "", 9)
+	// If total width exceeds available space, scale down
+	totalWidth := 0.0
+	for _, w := range colWidths {
+		totalWidth += w
+	}
+
+	if totalWidth > usableWidth {
+		scale := usableWidth / totalWidth
+		for i := range colWidths {
+			colWidths[i] *= scale
+			// Ensure still above minimum after scaling
+			if colWidths[i] < minWidth {
+				colWidths[i] = minWidth
+			}
+		}
+	}
+
+	return colWidths
+}
+
+// addTitlePage creates an improved title page.
+func (pg *PDFGenerator) addTitlePage(queryCount int) {
+	pg.pdf.AddPage()
+
+	// Main title
+	pg.pdf.SetFont("arial", "", 28)
+	pg.pdf.SetXY(pg.config.MarginX, 80)
+	pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+	pg.pdf.Cell(nil, pg.config.Title)
+
+	// Subtitle/Company
+	pg.pdf.SetFont("arial", "", 18)
+	pg.pdf.SetXY(pg.config.MarginX, 120)
 	pg.pdf.SetTextColor(100, 100, 100)
-	pg.pdf.SetXY(pg.config.MarginX, currentY)
-	pg.pdf.Cell(nil, fmt.Sprintf("Total rows: %d", len(data.Rows)))
+	pg.pdf.Cell(nil, pg.config.CompanyName)
+
+	// Report details box
+	boxY := 180.0
+	boxHeight := 100.0
+	pg.pdf.SetFillColor(248, 249, 250)
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, boxY, 400, boxHeight, "F")
+	pg.pdf.SetStrokeColor(200, 200, 200)
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, boxY, 400, boxHeight, "D")
+
+	// Report info
+	pg.pdf.SetFont("arial", "", 12)
+	pg.pdf.SetTextColor(0, 0, 0)
+
+	pg.pdf.SetXY(pg.config.MarginX+15, boxY+20)
+	pg.pdf.Cell(nil, fmt.Sprintf("📊 Total Queries: %d", queryCount))
+
+	if pg.config.ShowTimestamp {
+		pg.pdf.SetXY(pg.config.MarginX+15, boxY+40)
+		pg.pdf.Cell(nil, fmt.Sprintf("🕒 Generated: %s", time.Now().Format("2006-01-02 15:04:05")))
+	}
+
+	pg.pdf.SetXY(pg.config.MarginX+15, boxY+60)
+	pg.pdf.Cell(nil, "🎯 Report Type: SQL Query Execution")
+
+	// Footer line
+	pg.pdf.SetLineWidth(2)
+	pg.pdf.SetStrokeColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+	pg.pdf.Line(pg.config.MarginX, 320, 565, 320)
 }
 
 // readQueriesFromFile reads SQL queries from a given file.
@@ -582,17 +768,11 @@ func executeQuery(
 	}
 }
 
-// displayResults shows the query results in the specified format.
-func displayResults(results []QueryResult, format OutputFormat) {
-	if format == FormatPDF {
-		return
-	}
-
-	fmt.Printf("\n--- Query Results (%s format) ---\n", format)
+func displayResults(results []QueryResult) {
+	fmt.Printf("\n--- Query Results  ---\n")
 
 	for i, result := range results {
 		fmt.Printf("\n=== Query %d ===\n", i+1)
-		fmt.Printf("SQL: %s\n", result.Query)
 		fmt.Printf("Status: %s\n", result.Status)
 		fmt.Printf("Duration: %s\n", result.Duration)
 
@@ -606,94 +786,9 @@ func displayResults(results []QueryResult, format OutputFormat) {
 			continue
 		}
 
-		switch format {
-		case FormatJSON:
-			displayJSON(result.Data)
-		case FormatCSV:
-			displayCSV(result.Data)
-		case FormatTable:
-			displayTable(result.Data)
-		default:
-			displayTable(result.Data)
-		}
 	}
 }
 
-// displayJSON shows results in JSON format.
-func displayJSON(data *QueryData) {
-	jsonData, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		fmt.Printf("Error formatting JSON: %v\n", err)
-		return
-	}
-	fmt.Println(string(jsonData))
-}
-
-// displayCSV shows results in CSV format.
-func displayCSV(data *QueryData) {
-	fmt.Println(strings.Join(data.Columns, ","))
-	for _, row := range data.Rows {
-		values := make([]string, len(data.Columns))
-		for i, col := range data.Columns {
-			if val := row[col]; val != nil {
-				values[i] = fmt.Sprintf("%v", val)
-			} else {
-				values[i] = ""
-			}
-		}
-		fmt.Println(strings.Join(values, ","))
-	}
-}
-
-// displayTable shows results in a formatted table.
-func displayTable(data *QueryData) {
-	if len(data.Rows) == 0 {
-		fmt.Println("No rows returned.")
-		return
-	}
-
-	colWidths := make([]int, len(data.Columns))
-	for i, col := range data.Columns {
-		colWidths[i] = len(col)
-	}
-
-	for _, row := range data.Rows {
-		for i, col := range data.Columns {
-			val := ""
-			if row[col] != nil {
-				val = fmt.Sprintf("%v", row[col])
-			}
-			if len(val) > colWidths[i] {
-				colWidths[i] = len(val)
-			}
-		}
-	}
-
-	for i, col := range data.Columns {
-		fmt.Printf("%-*s", colWidths[i]+2, col)
-	}
-	fmt.Println()
-
-	for _, width := range colWidths {
-		fmt.Printf("%s", strings.Repeat("-", width+2))
-	}
-	fmt.Println()
-
-	for _, row := range data.Rows {
-		for i, col := range data.Columns {
-			val := ""
-			if row[col] != nil {
-				val = fmt.Sprintf("%v", row[col])
-			}
-			fmt.Printf("%-*s", colWidths[i]+2, val)
-		}
-		fmt.Println()
-	}
-
-	fmt.Printf("\nTotal rows: %d\n", len(data.Rows))
-}
-
-// saveResultsToFile saves all results to a JSON file.
 func saveResultsToFile(results []QueryResult, filename string) error {
 	file, err := os.Create(filename)
 	if err != nil {
@@ -706,79 +801,13 @@ func saveResultsToFile(results []QueryResult, filename string) error {
 	return encoder.Encode(results)
 }
 
-// simpleAddTable - Basic but reliable table rendering.
-func (pg *PDFGenerator) simpleAddTable(data *QueryData, startY float64) {
-	if len(data.Columns) == 0 || len(data.Rows) == 0 {
-		return
-	}
-
-	lineHeight := 20.0
-	currentY := startY
-	leftMargin := pg.config.MarginX
-
-	// Simple headers
-	pg.pdf.SetFont("arial", "", 12)
-	pg.pdf.SetTextColor(0, 0, 0)
-	pg.pdf.SetXY(leftMargin, currentY)
-
-	headerText := strings.Join(data.Columns, " | ")
-	pg.pdf.Cell(nil, headerText)
-	currentY += lineHeight
-
-	// Separator line
-	pg.pdf.SetXY(leftMargin, currentY)
-	pg.pdf.Cell(nil, strings.Repeat("-", len(headerText)))
-	currentY += lineHeight
-
-	// Data rows
-	pg.pdf.SetFont("arial", "", 10)
-
-	for i, row := range data.Rows {
-		// Page break check
-		if currentY > 750 {
-			pg.pdf.AddPage()
-			currentY = pg.config.MarginY
-		}
-
-		// Build row text
-		var rowValues []string
-		for _, col := range data.Columns {
-			val := "NULL"
-			if row[col] != nil {
-				val = fmt.Sprintf("%v", row[col])
-				// Truncate long values
-				if len(val) > 25 {
-					val = val[:22] + "..."
-				}
-			}
-			rowValues = append(rowValues, val)
-		}
-
-		pg.pdf.SetXY(leftMargin, currentY)
-		pg.pdf.Cell(nil, strings.Join(rowValues, " | "))
-		currentY += lineHeight
-
-		// Add some spacing every 5 rows
-		if (i+1)%5 == 0 {
-			currentY += 5
-		}
-	}
-
-	// Summary
-	currentY += 15
-	pg.pdf.SetFont("arial", "", 9)
-	pg.pdf.SetTextColor(100, 100, 100)
-	pg.pdf.SetXY(leftMargin, currentY)
-	pg.pdf.Cell(nil, fmt.Sprintf("Total rows: %d", len(data.Rows)))
-}
-
 // savePDFToFile saves the PDF bytes to a file.
 func savePDFToFile(pdfBytes []byte, filename string) error {
 	return os.WriteFile(filename, pdfBytes, 0644)
 }
 
 func main() {
-	// --- Configuration ---
+	// --- Configuration --- //
 	dbConfigs := map[string]DBConfig{
 		"postgres": {
 			DriverName: "postgres",
@@ -792,10 +821,9 @@ func main() {
 		},
 	}
 
-	// === CONFIGURATION OPTIONS ===
+	// === CONFIGURATION OPTIONS === //
 	selectedDB := "postgres"
-	outputFormat := FormatTable
-	saveToFile := true
+	saveToFile := false
 	outputFile := "query_results.json"
 
 	// PDF options
@@ -810,7 +838,7 @@ func main() {
 		log.Fatalf("Database '%s' not configured", selectedDB)
 	}
 
-	// --- Database Connection ---
+	// --- Database Connection --- //
 	db, err := sql.Open(config.DriverName, config.DataSourceName)
 	if err != nil {
 		log.Fatalf("Failed to open database connection: %v", err)
@@ -850,8 +878,7 @@ func main() {
 		results = append(results, result)
 	}
 
-	// Display results
-	displayResults(results, outputFormat)
+	displayResults(results)
 
 	// Save JSON results
 	if saveToFile {
@@ -862,7 +889,6 @@ func main() {
 		}
 	}
 
-	// Generate PDF
 	if generatePDF {
 		fmt.Printf("\nGenerating PDF report...\n")
 
