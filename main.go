@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"database/sql"
 	"encoding/json"
@@ -535,25 +534,40 @@ func (pg *PDFGenerator) drawWideTableHeaders(columns []string, colWidths []float
 	return startY + headerHeight
 }
 
-// readQueriesFromFile reads SQL queries from a given file.
+// readQueriesFromFile - SIMPLE VERSION for single/multi-line queries
 func readQueriesFromFile(filePath string) ([]string, error) {
-	file, err := os.Open(filePath)
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("could not open query file: %w", err)
 	}
-	defer file.Close()
+
+	// Convert to string
+	fileContent := string(content)
+
+	// Split by semicolons
+	rawQueries := strings.Split(fileContent, ";")
 
 	var queries []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" && !strings.HasPrefix(line, "--") {
-			queries = append(queries, line)
-		}
-	}
+	for _, query := range rawQueries {
+		// Remove comments and clean whitespace
+		lines := strings.Split(query, "\n")
+		var cleanLines []string
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading query file: %w", err)
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			// Skip empty lines and comments
+			if line != "" && !strings.HasPrefix(line, "--") {
+				cleanLines = append(cleanLines, line)
+			}
+		}
+
+		// Join lines and clean up
+		cleanQuery := strings.Join(cleanLines, " ")
+		cleanQuery = strings.TrimSpace(cleanQuery)
+
+		if cleanQuery != "" {
+			queries = append(queries, cleanQuery)
+		}
 	}
 
 	return queries, nil
@@ -700,9 +714,9 @@ func main() {
 	dbConfigs := map[string]DBConfig{
 		"postgres": {
 			DriverName: "postgres",
-			DataSourceName: "host=localhost port=5432 " +
-				"user=postgres password=RahulM6? " +
-				"dbname=sql-executor sslmode=disable",
+			DataSourceName: "host=10.83.150.44 port=5432 " +
+				"user=postgres password=nnmP0stgr3S " +
+				"dbname=xservices_ems sslmode=disable",
 		},
 		"mysql": {
 			DriverName:     "mysql",
