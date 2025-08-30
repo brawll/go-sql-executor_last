@@ -11,4 +11,5 @@ query_results_wide_horizontal.pdf
 query_results_combined.csv
 query_results_report.html
 query_results.xlsx
-go.sum
+.env
+query.http

@@ -11,12 +11,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/signintech/gopdf"
 	"github.com/xuri/excelize/v2"
@@ -1229,13 +1229,36 @@ func savePDFToFile(pdfBytes []byte, filename string) error {
 }
 
 func main() {
+
+	// Configuration options
+	saveToFile := false
+	outputFile := "query_results.json"
+
+	generatePDF := true
+	exportCSV := true
+	exportExcel := true
+	generateHTML := true
+
+	if err := godotenv.Load(); err != nil {
+		fmt.Println("No .env file found, relying on OS environment.")
+	}
+
+	// LOAD CONFIGURATION from environment variables
+	selectedDB := os.Getenv("DB_DRIVER")
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbHost := os.Getenv("DB_HOST")
+	dbName := os.Getenv("DB_NAME")
+	dbPort := os.Getenv("DB_PORT")
+	sslmode := os.Getenv("SSL_MODE")
+
 	// Database configuration
 	dbConfigs := map[string]DBConfig{
 		"postgres": {
 			DriverName: "postgres",
-			DataSourceName: "host=10.83.150.44 port=5432 " +
-				"user=postgres password=nnmP0stgr3S " +
-				"dbname=xservices_ems sslmode=disable",
+			DataSourceName: fmt.Sprintf("host=%s port=%s "+
+				"user=%s password=%s "+
+				"dbname=%s sslmode=%s", dbHost, dbPort, dbUser, dbPassword, dbName, sslmode),
 		},
 		"mysql": {
 			DriverName:     "mysql",
@@ -1243,184 +1266,50 @@ func main() {
 		},
 	}
 
-	// Configuration options
-	selectedDB := "postgres"
-	saveToFile := false
-	outputFile := "query_results.json"
-
-	// PDF configuration for wide horizontal layout
-	generatePDF := false
-	pdfConfig := DefaultPDFConfig()
-	pdfConfig.CompanyName = "Rahul's Database Reports"
-	pdfConfig.Title = "SQL Query Execution Report"
-	pdfConfig.FontSize = 10
-	pdfConfig.TableRowHeight = 20.0
-	pdfConfig.MarginX = 20.0
-	pdfConfig.MarginY = 20.0
-
-	//CSV, Excel and HTML options
-	exportCSV := false
-	exportExcel := false
-	generateHTML := true
-
-	config, ok := dbConfigs[selectedDB]
-	if !ok {
+	config, exists := dbConfigs[selectedDB]
+	if !exists {
 		log.Fatalf("Database '%s' not configured", selectedDB)
 	}
 
 	// Database Connection
-	db, err := sql.Open(config.DriverName, config.DataSourceName)
+	dsn := config.DataSourceName
+	db, err := sql.Open(selectedDB, dsn)
 	if err != nil {
 		log.Fatalf("Failed to open database connection: %v", err)
 	}
 	defer db.Close()
 
+	// Pinging the database to verify the connection is alive/established
 	err = db.Ping()
 	if err != nil {
 		log.Fatalf("Failed to connect to the database: %v", err)
 	}
-	fmt.Printf("Successfully connected to %s!\n", selectedDB)
+	fmt.Printf("Successfully connected to %s! database\n", selectedDB)
 
-	// Query Execution
-	queries, err := readQueriesFromFile("queries.txt")
-	if err != nil {
-		log.Fatalf("Failed to read queries: %v", err)
-	}
-	if len(queries) == 0 {
-		log.Fatalf("No queries found in queries.txt")
-	}
-	fmt.Printf("Found %d queries to execute.\n", len(queries))
+	// Initialize service
+	reportService := NewReportService(db, saveToFile, outputFile, generateHTML, generatePDF, exportCSV, exportExcel)
 
-	var wg sync.WaitGroup
-	resultChan := make(chan QueryResult, len(queries))
+	// Setup routes
+	http.HandleFunc("/health", reportService.HealthCheckHandler)
+	http.HandleFunc("/api/v1/generate-report", reportService.GenerateReportHandler)
 
-	for _, query := range queries {
-		wg.Add(1)
-		go executeQuery(&wg, db, query, resultChan)
-	}
-
-	wg.Wait()
-	close(resultChan)
-
-	// Collect results
-	var results []QueryResult
-	for result := range resultChan {
-		results = append(results, result)
+	// Configure server
+	server := &http.Server{
+		Addr:         ":8081",
+		Handler:      nil,               // Use default ServeMux
+		ReadTimeout:  30 * time.Second,  // Prevent slow client attacks
+		WriteTimeout: 300 * time.Second, // Allow time for large file generation
+		IdleTimeout:  60 * time.Second,
+		//	MaxHeaderBytes: 1 << 20, // 1MB max header size
 	}
 
-	displayResults(results)
+	log.Println("Report generation service starting on :8081")
+	log.Println("Available endpoints:")
+	log.Println("  POST /api/v1/generate-report - Generate reports")
+	log.Println("  GET  /health - Health check")
 
-	// Save JSON results (optional)
-	if saveToFile {
-		if err := saveResultsToFile(results, outputFile); err != nil {
-			log.Printf("Failed to save results to file: %v", err)
-		} else {
-			fmt.Printf("\nJSON results saved to: %s\n", outputFile)
-		}
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
 	}
 
-	// CSV Export
-	if exportCSV {
-		fmt.Printf("\nExporting to CSV...\n")
-		csvExporter := NewCSVExporter()
-
-		csvFilename := "query_results_combined.csv"
-		if err := csvExporter.ExportToCSV(results, csvFilename); err != nil {
-			log.Printf("Failed to export CSV: %v", err)
-		} else {
-			fmt.Printf("📄 CSV exported: %s\n", csvFilename)
-			if absPath, err := filepath.Abs(csvFilename); err == nil {
-				fmt.Printf("   📍 Full path: %s\n", absPath)
-			}
-		}
-	}
-	// Since you execute one query at a time, process the first result
-	if len(results) > 0 {
-		result := results[0] // Get first (and likely only) result
-		if exportExcel {
-			excelFilename := "query_results.xlsx"
-			if err := ExportToExcel(result, excelFilename); err != nil {
-				log.Printf("Failed to export Excel: %v", err)
-			} else {
-				fmt.Printf("📊 Excel exported: %s\n", excelFilename)
-				if result.Data != nil {
-					fmt.Printf("   📋 %d columns × %d rows\n",
-						len(result.Data.Columns), len(result.Data.Rows))
-				}
-			}
-		}
-	}
-
-	if generateHTML {
-		fmt.Printf("\nGenerating HTML report...\n")
-
-		htmlConfig := DefaultHTMLConfig()
-		htmlConfig.CompanyName = "Rahul's Database Reports"
-		htmlConfig.Title = "SQL Query Execution Report"
-		htmlConfig.HeaderColor = "#2c3e50"
-		htmlConfig.Theme = "light" // or "dark"
-
-		htmlBytes, err := GenerateHTML(htmlConfig, results)
-		if err != nil {
-			log.Printf("Failed to generate HTML: %v", err)
-		} else {
-			htmlOutputFile := "query_results_report.html"
-			if err := saveHTMLToFile(htmlBytes, htmlOutputFile); err != nil {
-				log.Printf("Failed to save HTML: %v", err)
-			} else {
-				fmt.Printf("🌐 HTML report saved to: %s\n", htmlOutputFile)
-				fmt.Printf("   📏 Open in web browser to see horizontally scrollable table\n")
-
-				if absPath, err := filepath.Abs(htmlOutputFile); err == nil {
-					fmt.Printf("   📍 Full path: %s\n", absPath)
-				}
-				fmt.Printf("   📊 File size: %.2f KB\n", float64(len(htmlBytes))/1024)
-			}
-		}
-	}
-
-	// Generate wide horizontal PDF
-	if generatePDF {
-		fmt.Printf("\nGenerating wide horizontal PDF report...\n")
-
-		pdfGen := NewPDFGenerator(pdfConfig)
-		pdfBytes, err := pdfGen.GenerateWideHorizontalPDF(results)
-
-		if err != nil {
-			log.Printf("Failed to generate PDF: %v", err)
-		} else {
-			pdfOutputFile := "query_results_wide_horizontal.pdf"
-			if err := savePDFToFile(pdfBytes, pdfOutputFile); err != nil {
-				log.Printf("Failed to save PDF: %v", err)
-			} else {
-				fmt.Printf("📄 Wide horizontal PDF saved to: %s\n", pdfOutputFile)
-				fmt.Printf("   📏 Use horizontal scroll in PDF viewer to see all columns\n")
-
-				if absPath, err := filepath.Abs(pdfOutputFile); err == nil {
-					fmt.Printf("   📍 Full path: %s\n", absPath)
-				}
-				fmt.Printf("   📊 File size: %.2f KB\n", float64(len(pdfBytes))/1024)
-			}
-		}
-	}
-
-	// Execution summary
-	fmt.Printf("\n✅ Execution completed!\n")
-	fmt.Printf("   - Executed %d queries\n", len(results))
-
-	successCount := 0
-	for _, result := range results {
-		if result.Status == "success" {
-			successCount++
-		}
-	}
-	fmt.Printf("   - %d successful, %d failed\n", successCount, len(results)-successCount)
-
-	if saveToFile {
-		fmt.Printf("   - JSON saved: %s\n", outputFile)
-	}
-	if generatePDF {
-		fmt.Printf("   - PDF generation: %s\n",
-			map[bool]string{true: "✅ Success", false: "❌ Failed"}[err == nil])
-	}
 }
