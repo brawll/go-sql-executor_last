@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -482,7 +480,7 @@ func (ce *CSVExporter) ExportToCSV(results []QueryResult, filename string) error
 	for queryIndex, result := range results {
 		// Add query information header
 		if ce.IncludeQueryInfo {
-			if err := ce.writeQueryHeader(writer, result, queryIndex+1); err != nil {
+			if err := ce.writeQueryHeader(writer, result); err != nil {
 				return fmt.Errorf("failed to write query header: %w", err)
 			}
 		}
@@ -535,17 +533,7 @@ func (ce *CSVExporter) ExportToCSV(results []QueryResult, filename string) error
 }
 
 // writeQueryHeader writes query information to CSV
-func (ce *CSVExporter) writeQueryHeader(writer *csv.Writer, result QueryResult, queryNum int) error {
-	// Query number and status
-	// if err := writer.Write([]string{
-	// 	fmt.Sprintf("QUERY %d", queryNum),
-	// 	fmt.Sprintf("Status: %s", result.Status),
-	// 	fmt.Sprintf("Duration: %s", result.Duration),
-	// 	fmt.Sprintf("Timestamp: %s", result.Timestamp),
-	// }); err != nil {
-	// 	return err
-	// }
-
+func (ce *CSVExporter) writeQueryHeader(writer *csv.Writer, result QueryResult) error {
 	// Query text
 	if err := writer.Write([]string{"SQL", result.Query}); err != nil {
 		return err
@@ -1053,45 +1041,6 @@ func (pg *PDFGenerator) drawWideTableHeaders(columns []string, colWidths []float
 	return startY + headerHeight
 }
 
-// readQueriesFromFile - SIMPLE VERSION for single/multi-line queries
-func readQueriesFromFile(filePath string) ([]string, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("could not open query file: %w", err)
-	}
-
-	// Convert to string
-	fileContent := string(content)
-
-	// Split by semicolons
-	rawQueries := strings.Split(fileContent, ";")
-
-	var queries []string
-	for _, query := range rawQueries {
-		// Remove comments and clean whitespace
-		lines := strings.Split(query, "\n")
-		var cleanLines []string
-
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			// Skip empty lines and comments
-			if line != "" && !strings.HasPrefix(line, "--") {
-				cleanLines = append(cleanLines, line)
-			}
-		}
-
-		// Join lines and clean up
-		cleanQuery := strings.Join(cleanLines, " ")
-		cleanQuery = strings.TrimSpace(cleanQuery)
-
-		if cleanQuery != "" {
-			queries = append(queries, cleanQuery)
-		}
-	}
-
-	return queries, nil
-}
-
 // executeQuery executes a single SQL query and stores the complete result.
 func executeQuery(
 	wg *sync.WaitGroup,
@@ -1211,28 +1160,12 @@ func displayResults(results []QueryResult) {
 	}
 }
 
-func saveResultsToFile(results []QueryResult, filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(results)
-}
-
 // savePDFToFile saves the PDF bytes to a file.
 func savePDFToFile(pdfBytes []byte, filename string) error {
 	return os.WriteFile(filename, pdfBytes, 0644)
 }
 
 func main() {
-
-	// Configuration options
-	saveToFile := false
-	outputFile := "query_results.json"
 
 	generatePDF := true
 	exportCSV := true
@@ -1287,7 +1220,7 @@ func main() {
 	fmt.Printf("Successfully connected to %s! database\n", selectedDB)
 
 	// Initialize service
-	reportService := NewReportService(db, saveToFile, outputFile, generateHTML, generatePDF, exportCSV, exportExcel)
+	reportService := NewReportService(db, generateHTML, generatePDF, exportCSV, exportExcel)
 
 	// Setup routes
 	http.HandleFunc("/health", reportService.HealthCheckHandler)

@@ -32,8 +32,6 @@ type ReportRequest struct {
 type ReportService struct {
 	tempDir      string
 	db           *sql.DB
-	saveToFile   bool
-	outputFile   string
 	generateHTML bool
 	generatePDF  bool
 	exportCSV    bool
@@ -41,13 +39,11 @@ type ReportService struct {
 }
 
 // NewReportService creates a new instance of ReportService
-func NewReportService(db *sql.DB, saveToFile bool, outputFile string, generateHTML bool, generatePDF bool, exportCSV bool, exportExcel bool) *ReportService {
+func NewReportService(db *sql.DB, generateHTML bool, generatePDF bool, exportCSV bool, exportExcel bool) *ReportService {
 	tempDir := os.TempDir()
 	return &ReportService{
 		tempDir:      tempDir,
 		db:           db,
-		saveToFile:   saveToFile,
-		outputFile:   outputFile,
 		generateHTML: generateHTML,
 		generatePDF:  generatePDF,
 		exportCSV:    exportCSV,
@@ -107,15 +103,6 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	displayResults(results)
-
-	// Save JSON results (optional)
-	if rs.saveToFile {
-		if err := saveResultsToFile(results, rs.outputFile); err != nil {
-			log.Printf("Failed to save results to file: %v", err)
-		} else {
-			fmt.Printf("\nJSON results saved to: %s\n", rs.outputFile)
-		}
-	}
 
 	// CSV Export
 	if rs.exportCSV {
@@ -221,10 +208,6 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 		}
 	}
 	fmt.Printf("   - %d successful, %d failed\n", successCount, len(results)-successCount)
-
-	if rs.saveToFile {
-		fmt.Printf("   - JSON saved: %s\n", rs.outputFile)
-	}
 
 }
 
