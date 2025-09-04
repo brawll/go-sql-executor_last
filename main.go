@@ -463,7 +463,6 @@ func NewCSVExporter() *CSVExporter {
 	}
 }
 
-// ExportToCSV exports query results to a CSV file
 func (ce *CSVExporter) ExportToCSV(results []QueryResult, filename string) error {
 	file, err := os.Create(filename)
 	if err != nil {
@@ -543,7 +542,6 @@ func (ce *CSVExporter) writeQueryHeader(writer *csv.Writer, result QueryResult) 
 	return writer.Write([]string{})
 }
 
-// Simple Excel export function
 func ExportToExcel(result QueryResult, filename string) error {
 	f := excelize.NewFile()
 	defer f.Close()
@@ -763,7 +761,7 @@ func (pg *PDFGenerator) addQueryResultWide(result QueryResult, queryNum int, sta
 	return currentY
 }
 
-// GenerateWideHorizontalPDF - FIXED VERSION with minimal wasted space
+// GenerateWideHorizontalPDF -  with minimal wasted space
 func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []QueryResult) ([]byte, error) {
 	// Find the result with the most data to calculate actual dimensions
 	var largestResult *QueryResult
@@ -870,7 +868,7 @@ func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []QueryResult) ([]byte
 	return buffer.Bytes(), nil
 }
 
-// calculateWideColumnWidths - OPTIMIZED VERSION for exact width calculation
+// calculateWideColumnWidths - for exact width calculation
 func (pg *PDFGenerator) calculateWideColumnWidths(data *QueryData, pageWidth float64) []float64 {
 	numCols := len(data.Columns)
 	if numCols == 0 {
@@ -913,7 +911,7 @@ func (pg *PDFGenerator) calculateWideColumnWidths(data *QueryData, pageWidth flo
 	return colWidths
 }
 
-// addWideTable - OPTIMIZED VERSION with precise width usage
+// addWideTable - with precise width usage
 func (pg *PDFGenerator) addWideTable(data *QueryData, startY, pageWidth float64) float64 {
 	if len(data.Columns) == 0 || len(data.Rows) == 0 {
 		return startY

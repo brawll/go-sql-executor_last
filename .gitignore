@@ -13,3 +13,4 @@ query_results_report.html
 query_results.xlsx
 .env
 query.http
+go-sql-executor.exe

@@ -1,0 +1,380 @@
+openapi: 3.0.3
+info:
+  title: SQL Report Generator API
+  description: A REST API for executing SQL queries and generating reports in multiple formats
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: 'http://localhost:8081'
+    description: Development server
+
+paths:
+  /health:
+    get:
+      summary: Health Check
+      description: Returns the health status of the API server
+      operationId: healthCheck
+      tags:
+        - System
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '500':
+          description: Server is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/generate-report:
+    post:
+      summary: Generate SQL Report
+      description: Execute SQL queries and generate reports in multiple formats (CSV, Excel, HTML, PDF)
+      operationId: generateReport
+      tags:
+        - Reports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportRequest'
+            example:
+              query: "SELECT * FROM users WHERE status = 'active' LIMIT 10;"
+              parameters:
+                limit: 10
+                status: "active"
+      responses:
+        '200':
+          description: Report generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Query validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    # Request schemas
+    ReportRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: SQL query to execute
+          example: "SELECT id, name, email FROM users WHERE created_at > '2025-01-01'"
+          minLength: 1
+        parameters:
+          type: object
+          description: Optional query parameters
+          additionalProperties:
+            type: string
+          example:
+            user_id: "123"
+            date_from: "2025-01-01"
+        database:
+          $ref: '#/components/schemas/DatabaseConfig'
+      additionalProperties: false
+
+    DatabaseConfig:
+      type: object
+      description: Database connection configuration (optional, uses environment config by default)
+      properties:
+        host:
+          type: string
+          description: Database host
+          example: "localhost"
+        port:
+          type: integer
+          description: Database port
+          example: 5432
+          minimum: 1
+          maximum: 65535
+        database:
+          type: string
+          description: Database name
+          example: "mydb"
+        username:
+          type: string
+          description: Database username
+          example: "dbuser"
+        password:
+          type: string
+          description: Database password
+          format: password
+          example: "dbpass123"
+        driver:
+          type: string
+          enum: [postgres, mysql]
+          description: Database driver type
+          example: "postgres"
+      additionalProperties: false
+
+    # Response schemas
+    ReportResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the report generation was successful
+          example: true
+        message:
+          type: string
+          description: Status message
+          example: "Report generated successfully"
+        data:
+          $ref: '#/components/schemas/QueryResult'
+        files:
+          type: array
+          description: List of generated report files
+          items:
+            $ref: '#/components/schemas/FileInfo'
+        summary:
+          $ref: '#/components/schemas/ExecutionSummary'
+      required:
+        - success
+        - message
+
+    QueryResult:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The executed SQL query
+          example: "SELECT id, name FROM users"
+        data:
+          $ref: '#/components/schemas/QueryData'
+        error:
+          type: string
+          description: Error message if query failed
+          example: "syntax error at or near SELECT"
+        status:
+          type: string
+          enum: [success, error]
+          description: Execution status
+          example: "success"
+        duration:
+          type: string
+          description: Query execution time
+          example: "25.3ms"
+        timestamp:
+          type: string
+          format: date-time
+          description: Execution timestamp
+          example: "2025-09-04T03:54:36Z"
+      required:
+        - query
+        - status
+        - timestamp
+
+    QueryData:
+      type: object
+      properties:
+        columns:
+          type: array
+          description: Column names from the query result
+          items:
+            type: string
+          example: ["id", "name", "email", "created_at"]
+        rows:
+          type: array
+          description: Query result rows
+          items:
+            type: object
+            description: A map where keys are column names and values are cell data
+            additionalProperties:
+              type: object
+              description: Cell value (can be null)
+              nullable: true
+            example:
+              - id: 1
+                name: "John Doe"
+                email: "john@example.com"
+                created_at: "2025-01-01T10:00:00Z"
+              - id: 2
+                name: "Jane Smith"
+                email: "jane@example.com"
+                created_at: "2025-01-02T11:30:00Z"
+      required:
+        - columns
+        - rows
+
+    FileInfo:
+      type: object
+      description: Information about generated report file
+      properties:
+        type:
+          type: string
+          enum: [csv, excel, html, pdf]
+          description: File format type
+          example: "csv"
+        filename:
+          type: string
+          description: Generated filename
+          example: "query_results_combined.csv"
+        path:
+          type: string
+          description: Full file path
+          example: "/app/reports/query_results_combined.csv"
+        size_bytes:
+          type: integer
+          description: File size in bytes
+          example: 1024
+        columns:
+          type: integer
+          description: Number of columns in the data
+          example: 4
+        rows:
+          type: integer
+          description: Number of rows in the data
+          example: 100
+      required:
+        - type
+        - filename
+
+    ExecutionSummary:
+      type: object
+      description: Summary of query execution results
+      properties:
+        total_queries:
+          type: integer
+          description: Total number of queries executed
+          example: 1
+        successful_queries:
+          type: integer
+          description: Number of successfully executed queries
+          example: 1
+        failed_queries:
+          type: integer
+          description: Number of failed queries
+          example: 0
+        total_execution_time:
+          type: string
+          description: Total time taken for all executions
+          example: "1.25s"
+      required:
+        - total_queries
+        - successful_queries
+        - failed_queries
+
+    HealthResponse:
+      type: object
+      description: Server health status
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+          description: Server health status
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+          description: Response timestamp
+          example: "2025-09-04T03:54:36Z"
+        service:
+          type: string
+          description: Service name
+          example: "report-generator"
+        version:
+          type: string
+          description: API version
+          example: "1.0.0"
+        database:
+          type: string
+          enum: [connected, disconnected]
+          description: Database connection status
+          example: "connected"
+      required:
+        - status
+        - timestamp
+        - service
+
+    ErrorResponse:
+      type: object
+      description: Error response
+      properties:
+        success:
+          type: boolean
+          description: Always false for errors
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Error code
+              example: "VALIDATION_ERROR"
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Query parameter is required"
+            details:
+              type: object
+              description: Additional error details
+              additionalProperties: true
+              example:
+                field: "query"
+                provided_value: ""
+          required:
+            - code
+            - message
+          example:
+            code: "VALIDATION_ERROR"
+            message: "Invalid request parameters"
+            details:
+              query: "Query cannot be empty"
+        timestamp:
+          type: string
+          format: date-time
+          description: Error timestamp
+          example: "2025-09-04T03:54:36Z"
+      required:
+        - success
+        - error
+        - timestamp
+
+  # Security schemes
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key authentication
+
+# Global security requirement (optional)
+security:
+  - ApiKeyAuth: []
+
+# External documentation
+externalDocs:
+  description: Find out more about this API
+  url: https://github.com/your-org/go-sql-executor
