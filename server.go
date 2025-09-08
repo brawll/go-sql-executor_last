@@ -30,9 +30,9 @@ type ReportRequest struct {
 
 // OpenAPI-compliant response structures
 type ReportResponse struct {
-	Success bool             `json:"success"`
-	Message string           `json:"message"`
-	Data    *QueryResult     `json:"data,omitempty"`
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	// Data    *QueryResult     `json:"data,omitempty"`
 	Files   []FileInfo       `json:"files,omitempty"`
 	Summary ExecutionSummary `json:"summary"`
 }
@@ -326,7 +326,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 
 	// Handle success/failure cases
 	if len(results) > 0 && results[0].Status == "success" {
-		response.Data = &results[0]
+		//response.Data = &results[0]
 
 		if len(errors) > 0 {
 			response.Message = fmt.Sprintf("Report executed successfully but some files failed to generate: %s", errors[0])
@@ -334,7 +334,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 			response.Message = "Report generated successfully"
 		}
 	} else if len(results) > 0 {
-		response.Data = &results[0]
+		// response.Data = &results[0]
 		response.Message = fmt.Sprintf("Query executed but with errors: %s", results[0].Error)
 	} else {
 		response.Message = "No query results available"
@@ -371,6 +371,8 @@ func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Reque
 		Version:   "1.0.0",
 		Database:  dbStatus,
 	}
+
+	fmt.Println(healthStatus)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
