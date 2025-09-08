@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"go-sql-executor/exporters"
 	"log"
 	"net/http"
 	"os"
@@ -256,7 +257,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	if rs.generatePDF {
 		fmt.Printf("Generating PDF report...\n")
 
-		pdfConfig := DefaultPDFConfig()
+		pdfConfig := exporters.DefaultPDFConfig()
 		pdfConfig.CompanyName = "Rahul's Database Reports"
 		pdfConfig.Title = "SQL Query Execution Report"
 		pdfConfig.FontSize = 10
@@ -264,7 +265,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 		pdfConfig.MarginX = 20.0
 		pdfConfig.MarginY = 20.0
 
-		pdfGen := NewPDFGenerator(pdfConfig)
+		pdfGen := exporters.NewPDFGenerator(pdfConfig)
 		pdfBytes, err := pdfGen.GenerateWideHorizontalPDF(results)
 
 		if err != nil {
