@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	_ "embed"
 	"encoding/csv"
 	"fmt"
 	"html/template"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
@@ -1163,6 +1166,9 @@ func savePDFToFile(pdfBytes []byte, filename string) error {
 	return os.WriteFile(filename, pdfBytes, 0644)
 }
 
+//go:embed openapi.yaml
+var openAPISpec []byte // This is a compiler directive, not a function call
+
 func main() {
 
 	generatePDF := true
@@ -1224,6 +1230,18 @@ func main() {
 	http.HandleFunc("/health", reportService.HealthCheckHandler)
 	http.HandleFunc("/api/v1/generate-report", reportService.GenerateReportHandler)
 
+	// Serve OpenAPI spec
+	http.HandleFunc("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Write(openAPISpec)
+	})
+
+	// Serve Swagger UI
+	http.HandleFunc("/docs/", httpSwagger.Handler(
+		httpSwagger.URL("/openapi.yaml"),
+	))
+
 	// Configure server
 	server := &http.Server{
 		Addr:         ":8081",
@@ -1238,6 +1256,8 @@ func main() {
 	log.Println("Available endpoints:")
 	log.Println("  POST /api/v1/generate-report - Generate reports")
 	log.Println("  GET  /health - Health check")
+	log.Println("  GET  /docs/ - Interactive API documentation (Swagger UI)")
+	log.Println("  GET  /openapi.yaml - OpenAPI specification")
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed to start: %v", err)

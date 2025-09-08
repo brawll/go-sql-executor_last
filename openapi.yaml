@@ -80,6 +80,57 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+    /openapi.yaml:
+    get:
+      summary: Get OpenAPI Specification
+      description: Returns the OpenAPI 3.0 specification document in YAML format
+      operationId: getOpenAPISpec
+      tags:
+        - Documentation
+      responses:
+        '200':
+          description: OpenAPI specification returned successfully
+          content:
+            application/yaml:
+              schema:
+                type: string
+                format: binary
+                description: The OpenAPI specification in YAML format
+              example: |
+                openapi: 3.0.3
+                info:
+                  title: SQL Report Generator API
+                  version: 1.0.0
+                # ... rest of the specification
+        '404':
+          description: OpenAPI specification file not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /docs/:
+    get:
+      summary: Interactive API Documentation (Swagger UI)
+      description: Serves the interactive Swagger UI interface for exploring and testing the API
+      operationId: getSwaggerUI
+      tags:
+        - Documentation
+      responses:
+        '200':
+          description: Swagger UI interface loaded successfully
+          content:
+            text/html:
+              schema:
+                type: string
+                description: HTML page containing the Swagger UI interface
+        '404':
+          description: Swagger UI resources not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   schemas:
     # Request schemas

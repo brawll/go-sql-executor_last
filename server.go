@@ -326,7 +326,6 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 
 	// Handle success/failure cases
 	if len(results) > 0 && results[0].Status == "success" {
-		//response.Data = &results[0]
 
 		if len(errors) > 0 {
 			response.Message = fmt.Sprintf("Report executed successfully but some files failed to generate: %s", errors[0])
@@ -334,7 +333,6 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 			response.Message = "Report generated successfully"
 		}
 	} else if len(results) > 0 {
-		// response.Data = &results[0]
 		response.Message = fmt.Sprintf("Query executed but with errors: %s", results[0].Error)
 	} else {
 		response.Message = "No query results available"
