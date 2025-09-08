@@ -1139,28 +1139,6 @@ func executeQuery(
 	}
 }
 
-func displayResults(results []QueryResult) {
-	fmt.Printf("\n--- Query Results  ---\n")
-
-	for i, result := range results {
-		fmt.Printf("\n=== Query %d ===\n", i+1)
-		fmt.Printf("Status: %s\n", result.Status)
-		fmt.Printf("Duration: %s\n", result.Duration)
-
-		if result.Error != "" {
-			fmt.Printf("Error: %s\n", result.Error)
-			continue
-		}
-
-		if result.Data == nil || len(result.Data.Rows) == 0 {
-			fmt.Println("No data returned.")
-			continue
-		}
-
-		fmt.Printf("Columns: %d, Rows: %d\n", len(result.Data.Columns), len(result.Data.Rows))
-	}
-}
-
 // savePDFToFile saves the PDF bytes to a file.
 func savePDFToFile(pdfBytes []byte, filename string) error {
 	return os.WriteFile(filename, pdfBytes, 0644)
