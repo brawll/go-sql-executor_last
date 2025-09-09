@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"time"
 )
 
 // type DatabaseConfig struct {
@@ -73,4 +74,88 @@ type ReportService struct {
 	generatePDF  bool
 	exportCSV    bool
 	exportExcel  bool
+}
+
+// connections Database Models
+type UserDBConnection struct {
+	ID             string    `json:"id" db:"id"`
+	ConnectionName string    `json:"connection_name" db:"connection_name"`
+	Username       string    `json:"username" db:"username"`
+	Password       string    `json:"password" db:"password"`
+	Hostname       string    `json:"hostname" db:"hostname"`
+	Port           int       `json:"port" db:"port"`
+	DBName         string    `json:"db_name" db:"db_name"`
+	DBType         string    `json:"db_type" db:"db_type"`
+	Status         string    `json:"status" db:"status"`
+	CreatedAt      time.Time `json:"created_at" db:"created_at"`
+}
+
+type StoredSchema struct {
+	ID           string                 `json:"id" db:"id"`
+	ConnectionID string                 `json:"connection_id" db:"connection_id"`
+	SourceDBName string                 `json:"source_db_name" db:"source_db_name"`
+	CapturedAt   time.Time              `json:"captured_at" db:"captured_at"`
+	SchemaJSON   map[string]interface{} `json:"schema_json" db:"schema_json"`
+}
+
+// Request/Response Models
+type ConnectionCreateRequest struct {
+	ConnectionName string `json:"connection_name" validate:"required"`
+	Username       string `json:"username" validate:"required"`
+	Password       string `json:"password" validate:"required"`
+	Hostname       string `json:"hostname" validate:"required"`
+	Port           int    `json:"port" validate:"required"`
+	DBType         string `json:"db_type" validate:"required"`
+	DBName         string `json:"db_name" validate:"required"`
+	Status         string `json:"status"`
+}
+
+type ConnectionResponse struct {
+	ID             string    `json:"id"`
+	ConnectionName string    `json:"connection_name"`
+	Username       string    `json:"username"`
+	Hostname       string    `json:"hostname"`
+	Port           int       `json:"port"`
+	DBType         string    `json:"db_type"`
+	DBName         string    `json:"db_name"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type ErrorResponseConnection struct {
+	Detail string `json:"detail"`
+}
+
+type SuccessResponse struct {
+	Message string `json:"message"`
+}
+
+// Schema structures
+type ColumnInfo struct {
+	Name         string      `json:"name"`
+	Type         string      `json:"type"`
+	Nullable     string      `json:"nullable"`
+	Default      interface{} `json:"default"`
+	MaxLength    interface{} `json:"max_length"`
+	IsPrimaryKey bool        `json:"is_primary_key"`
+}
+
+type TableInfo struct {
+	Type    string       `json:"type"`
+	Columns []ColumnInfo `json:"columns"`
+}
+
+type SchemaInfo struct {
+	Tables map[string]TableInfo `json:"tables"`
+}
+
+// Database Connection Manager
+type DatabaseConnectionManager struct {
+	db *sql.DB
+}
+
+// Connection Handler
+type ConnectionHandler struct {
+	dcm *DatabaseConnectionManager
+	db  *sql.DB
 }

@@ -13,7 +13,8 @@ import (
 
 	httpSwagger "github.com/swaggo/http-swagger"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
+	_ "github.com/go-sql-driver/mysql"   // MySQL driver
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -22,6 +23,8 @@ import (
 var openAPISpec []byte // This is a compiler directive, not a function call
 
 func main() {
+
+	startConnectionService()
 
 	generatePDF := true
 	exportCSV := true
@@ -109,10 +112,83 @@ func main() {
 	log.Println("  POST /api/v1/generate-report - Generate reports")
 	log.Println("  GET  /health - Health check")
 	log.Println("  GET  /docs/ - Interactive API documentation (Swagger UI)")
-	log.Println("  GET  /openapi.yaml - OpenAPI specification")
+	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 
+}
+
+func startConnectionService() {
+	// Load environment variables
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, relying on OS environment.")
+	}
+
+	// LOAD CONFIGURATION from environment variables
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbHost := os.Getenv("DB_HOST")
+	dbName := os.Getenv("DB_NAME")
+	dbPort := os.Getenv("DB_PORT")
+	sslmode := os.Getenv("SSL_MODE")
+
+	// Get database URL from environment
+	databaseURL := fmt.Sprintf("host=%s port=%s "+
+		"user=%s password=%s "+
+		"dbname=%s sslmode=%s", dbHost, dbPort, dbUser, dbPassword, dbName, sslmode)
+	if databaseURL == "" {
+		log.Fatal("DATABASE ENV not properly configured.")
+	}
+
+	// Connect to database
+	db, err := sql.Open("postgres", databaseURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to ping database: %v", err)
+	}
+
+	// Initialize schemas and tables
+	if err := handler.InitializeSchemas(db); err != nil {
+		log.Fatalf("Failed to initialize schemas: %v", err)
+	}
+
+	// Create connection handler
+	connectionHandler := handler.NewConnectionHandler(db)
+
+	// Setup routes with Go 1.22+ enhanced ServeMux
+	mux := http.NewServeMux()
+
+	// Apply CORS middleware
+	handler := handler.CorsMiddleware(mux)
+
+	// Connection endpoints with method and path parameter support
+	mux.HandleFunc("POST /api/connections", connectionHandler.CreateConnection)
+	mux.HandleFunc("GET /api/connections", connectionHandler.GetConnections)
+	//mux.HandleFunc("GET /api/connections/{connection_id}", connectionHandler.GetConnection)
+	mux.HandleFunc("DELETE /api/connections/{connection_id}", connectionHandler.DeleteConnection)
+
+	// Start server
+	port := os.Getenv("CONNECTION_SERVICE_PORT")
+	if port == "" {
+		port = "8000"
+	}
+
+	log.Printf("Connection handler service starting on port %s", port)
+	log.Println("Available endpoints:")
+	log.Println("  POST /api/connections - Create database connection")
+	log.Println("  GET  /api/connections - Get all connections")
+	log.Println("  DELETE /api/connections/{id} - Delete connection")
+	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
+	//log.Println("  GET  /api/connections/{id} - Get connection by ID")
+
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
+	}
 }

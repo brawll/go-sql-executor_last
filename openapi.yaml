@@ -109,6 +109,120 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /api/connections:
+    post:
+      summary: Create a new database connection
+      description: Creates a new database connection after validating the connection parameters
+      operationId: createConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectionCreateRequest'
+      responses:
+        '200':
+          description: Connection created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          description: Invalid request or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseConnection'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseConnection'
+    get:
+      summary: Get all database connections
+      description: Retrieves a list of all database connections
+      operationId: getConnections
+      responses:
+        '200':
+          description: List of connections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConnectionResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseConnection'
+
+  # /api/connections/{connection_id}:
+  #   get:
+  #     summary: Get connection by ID
+  #     description: Retrieves a specific database connection by its ID
+  #     operationId: getConnection
+  #     parameters:
+  #       - name: connection_id
+  #         in: path
+  #         required: true
+  #         description: The connection ID
+  #         schema:
+  #           type: string
+  #           format: uuid
+  #     responses:
+  #       '200':
+  #         description: Connection details
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/ConnectionResponse'
+  #       '404':
+  #         description: Connection not found
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/ErrorResponseConnection'
+  #       '500':
+  #         description: Internal server error
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/ErrorResponseConnection'
+  #   delete:
+  #     summary: Delete connection
+  #     description: Deletes a database connection by its ID
+  #     operationId: deleteConnection
+  #     parameters:
+  #       - name: connection_id
+  #         in: path
+  #         required: true
+  #         description: The connection ID
+  #         schema:
+  #           type: string
+  #           format: uuid
+  #     responses:
+  #       '200':
+  #         description: Connection deleted successfully
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/SuccessResponse'
+  #       '404':
+  #         description: Connection not found
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/ErrorResponseConnection'
+  #       '500':
+  #         description: Internal server error
+  #         content:
+  #           application/json:
+  #             schema:
+  #               $ref: '#/components/schemas/ErrorResponseConnection'
+
   /docs/:
     get:
       summary: Interactive API Documentation (Swagger UI)
@@ -413,6 +527,111 @@ components:
         - error
         - timestamp
 
+    ConnectionCreateRequest:
+      type: object
+      required:
+        - connection_name
+        - username
+        - password
+        - hostname
+        - port
+        - db_type
+        - db_name
+      properties:
+        connection_name:
+          type: string
+          description: Name of the connection
+          example: "Production Database"
+        username:
+          type: string
+          description: Database username
+          example: "dbuser"
+        password:
+          type: string
+          description: Database password
+          example: "securepassword"
+        hostname:
+          type: string
+          description: Database host
+          example: "localhost"
+        port:
+          type: integer
+          description: Database port
+          example: 5432
+        db_type:
+          type: string
+          enum: [PostgreSQL, MySQL, MSSQL]
+          description: Type of database
+          example: "PostgreSQL"
+        db_name:
+          type: string
+          description: Database name
+          example: "mydatabase"
+        status:
+          type: string
+          description: Connection status
+          default: "active"
+          example: "active"
+
+    ConnectionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Connection ID
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        connection_name:
+          type: string
+          description: Name of the connection
+          example: "Production Database"
+        username:
+          type: string
+          description: Database username
+          example: "dbuser"
+        hostname:
+          type: string
+          description: Database host
+          example: "localhost"
+        port:
+          type: integer
+          description: Database port
+          example: 5432
+        db_type:
+          type: string
+          enum: [PostgreSQL, MySQL, MSSQL]
+          description: Type of database
+          example: "PostgreSQL"
+        db_name:
+          type: string
+          description: Database name
+          example: "mydatabase"
+        status:
+          type: string
+          description: Connection status
+          example: "active"
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+          example: "2023-12-01T10:00:00Z"
+
+    ErrorResponseConnection:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Invalid JSON"
+
+    SuccessResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Success message
+          example: "Connection deleted successfully"
+
   # Security schemes
   securitySchemes:
     ApiKeyAuth:
@@ -420,12 +639,17 @@ components:
       in: header
       name: X-API-Key
       description: API key authentication
+    
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 
 # Global security requirement (optional)
 security:
   - ApiKeyAuth: []
 
 # External documentation
-externalDocs:
-  description: Find out more about this API
-  url: https://github.com/your-org/go-sql-executor
+# externalDocs:
+#  description: Find out more about this API
+# url: https://github.com/your-org/go-sql-executor
