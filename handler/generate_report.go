@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"database/sql"
@@ -11,78 +11,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"go-sql-executor/models"
 )
-
-// type DatabaseConfig struct {
-// 	Host     string `json:"host"`
-// 	Port     int    `json:"port"`
-// 	Database string `json:"database"`
-// 	Username string `json:"username"`
-// 	Password string `json:"password"`
-// 	Driver   string `json:"driver"` // "postgres", "mysql", etc.
-// }
-
-// ReportRequest represents the incoming request structure
-type ReportRequest struct {
-	Query string `json:"query"`
-	//	Database   DatabaseConfig    `json:"database"`
-	// Parameters map[string]string `json:"parameters"` // Optional query parameters
-}
-
-// OpenAPI-compliant response structures
-type ReportResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	// Data    *QueryResult     `json:"data,omitempty"`
-	Files   []FileInfo       `json:"files,omitempty"`
-	Summary ExecutionSummary `json:"summary"`
-}
-
-type FileInfo struct {
-	Type      string `json:"type"`
-	Filename  string `json:"filename"`
-	Path      string `json:"path,omitempty"`
-	SizeBytes int64  `json:"size_bytes,omitempty"`
-	Columns   int    `json:"columns,omitempty"`
-	Rows      int    `json:"rows,omitempty"`
-}
-
-type ExecutionSummary struct {
-	TotalQueries       int    `json:"total_queries"`
-	SuccessfulQueries  int    `json:"successful_queries"`
-	FailedQueries      int    `json:"failed_queries"`
-	TotalExecutionTime string `json:"total_execution_time"`
-}
-
-type HealthResponse struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
-	Service   string `json:"service"`
-	Version   string `json:"version"`
-	Database  string `json:"database"`
-}
-
-type ErrorResponse struct {
-	Success   bool      `json:"success"`
-	Error     ErrorInfo `json:"error"`
-	Timestamp string    `json:"timestamp"`
-}
-
-type ErrorInfo struct {
-	Code    string                 `json:"code"`
-	Message string                 `json:"message"`
-	Details map[string]interface{} `json:"details,omitempty"`
-}
-
-// ReportService handles the core business logic
-type ReportService struct {
-	tempDir      string
-	db           *sql.DB
-	generateHTML bool
-	generatePDF  bool
-	exportCSV    bool
-	exportExcel  bool
-}
 
 // NewReportService creates a new instance of ReportService
 func NewReportService(db *sql.DB, generateHTML bool, generatePDF bool, exportCSV bool, exportExcel bool) *ReportService {
@@ -132,7 +63,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	fmt.Printf("Found %d queries to execute.\n", len(queries))
 
 	var wg sync.WaitGroup
-	resultChan := make(chan QueryResult, len(queries))
+	resultChan := make(chan models.QueryResult, len(queries))
 
 	for _, query := range queries {
 		wg.Add(1)
@@ -143,7 +74,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	close(resultChan)
 
 	// Collect results
-	var results []QueryResult
+	var results []models.QueryResult
 	for result := range resultChan {
 		results = append(results, result)
 	}
@@ -155,7 +86,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	// Export CSV
 	if rs.exportCSV {
 		fmt.Printf("Generating CSV report...\n")
-		csvExporter := NewCSVExporter()
+		csvExporter := exporters.NewCSVExporter()
 		csvFilename := "query_results_combined.csv"
 
 		if err := csvExporter.ExportToCSV(results, csvFilename); err != nil {
@@ -188,7 +119,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 		result := results[0] // Process first result
 		excelFilename := "query_results.xlsx"
 
-		if err := ExportToExcel(result, excelFilename); err != nil {
+		if err := exporters.ExportToExcel(result, excelFilename); err != nil {
 			log.Printf("Failed to export Excel: %v", err)
 			errors = append(errors, fmt.Sprintf("Excel export failed: %v", err))
 		} else {
@@ -216,20 +147,20 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	if rs.generateHTML {
 		fmt.Printf("Generating HTML report...\n")
 
-		htmlConfig := DefaultHTMLConfig()
+		htmlConfig := exporters.DefaultHTMLConfig()
 		htmlConfig.CompanyName = "Rahul's Database Reports"
 		htmlConfig.Title = "SQL Query Execution Report"
 		htmlConfig.HeaderColor = "#2c3e50"
 		htmlConfig.Theme = "light"
 
-		htmlBytes, err := GenerateHTML(htmlConfig, results)
+		htmlBytes, err := exporters.GenerateHTML(htmlConfig, results)
 		if err != nil {
 			log.Printf("Failed to generate HTML: %v", err)
 			errors = append(errors, fmt.Sprintf("HTML generation failed: %v", err))
 		} else {
 			htmlOutputFile := "query_results_report.html"
 
-			if err := saveHTMLToFile(htmlBytes, htmlOutputFile); err != nil {
+			if err := exporters.SaveHTMLToFile(htmlBytes, htmlOutputFile); err != nil {
 				log.Printf("Failed to save HTML: %v", err)
 				errors = append(errors, fmt.Sprintf("HTML save failed: %v", err))
 			} else {
@@ -274,7 +205,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 		} else {
 			pdfOutputFile := "query_results_wide_horizontal.pdf"
 
-			if err := savePDFToFile(pdfBytes, pdfOutputFile); err != nil {
+			if err := exporters.SavePDFToFile(pdfBytes, pdfOutputFile); err != nil {
 				log.Printf("Failed to save PDF: %v", err)
 				errors = append(errors, fmt.Sprintf("PDF save failed: %v", err))
 			} else {
@@ -344,39 +275,6 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(response)
 }
 
-func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// Check database connection
-	dbStatus := "disconnected"
-	if rs.db != nil {
-		if err := rs.db.Ping(); err == nil {
-			dbStatus = "connected"
-		}
-	}
-
-	// Determine overall health status
-	healthStatus := "healthy"
-	if dbStatus == "disconnected" {
-		healthStatus = "unhealthy"
-		http.Error(w, `{"error":"Database connection failed"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	response := HealthResponse{
-		Status:    healthStatus,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Service:   "report-generator",
-		Version:   "1.0.0",
-		Database:  dbStatus,
-	}
-
-	fmt.Println(healthStatus)
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
-}
-
 // validateRequest validates the incoming request
 func (rs *ReportService) validateRequest(req *ReportRequest) error {
 	if req.Query == "" {
@@ -402,4 +300,101 @@ func (rs *ReportService) writeErrorResponse(w http.ResponseWriter, statusCode in
 
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(errorResponse)
+}
+
+// executeQuery executes a single SQL query and stores the complete result.
+func executeQuery(
+	wg *sync.WaitGroup,
+	db *sql.DB,
+	query string,
+	resultChan chan<- models.QueryResult,
+) {
+	defer wg.Done()
+
+	start := time.Now()
+	timestamp := start.Format("2006-01-02 15:04:05")
+
+	rows, err := db.Query(query)
+	if err != nil {
+		resultChan <- models.QueryResult{
+			Query:     query,
+			Error:     fmt.Sprintf("failed to execute query: %v", err),
+			Status:    "error",
+			Duration:  time.Since(start).String(),
+			Timestamp: timestamp,
+		}
+		return
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		resultChan <- models.QueryResult{
+			Query:     query,
+			Error:     fmt.Sprintf("failed to get columns: %v", err),
+			Status:    "error",
+			Duration:  time.Since(start).String(),
+			Timestamp: timestamp,
+		}
+		return
+	}
+
+	var queryData models.QueryData
+	queryData.Columns = columns
+	queryData.Rows = make([]map[string]interface{}, 0)
+
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			resultChan <- models.QueryResult{
+				Query:     query,
+				Error:     fmt.Sprintf("failed to scan row: %v", err),
+				Status:    "error",
+				Duration:  time.Since(start).String(),
+				Timestamp: timestamp,
+			}
+			return
+		}
+
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			val := values[i]
+			if val == nil {
+				row[col] = nil
+			} else {
+				if b, ok := val.([]byte); ok {
+					row[col] = string(b)
+				} else {
+					row[col] = val
+				}
+			}
+		}
+
+		queryData.Rows = append(queryData.Rows, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		resultChan <- models.QueryResult{
+			Query:     query,
+			Error:     fmt.Sprintf("error iterating rows: %v", err),
+			Status:    "error",
+			Duration:  time.Since(start).String(),
+			Timestamp: timestamp,
+		}
+		return
+	}
+
+	resultChan <- models.QueryResult{
+		Query:     query,
+		Data:      &queryData,
+		Status:    "success",
+		Duration:  time.Since(start).String(),
+		Timestamp: timestamp,
+	}
 }

@@ -1,7 +1,12 @@
-package exporters
+package models
 
-// Shared types that match main package
-// QueryData holds the actual data from a query result.
+// DBConfig holds the configuration for a database connection.
+type DBConfig struct {
+	DriverName     string
+	DataSourceName string
+}
+
+// Type aliases to exporters package types to avoid duplication
 type QueryData struct {
 	Columns []string                 `json:"columns"`
 	Rows    []map[string]interface{} `json:"rows"`
@@ -15,19 +20,4 @@ type QueryResult struct {
 	Status    string     `json:"status"`
 	Duration  string     `json:"duration,omitempty"`
 	Timestamp string     `json:"timestamp"`
-}
-
-// PDFConfig holds PDF generation configuration.
-type PDFConfig struct {
-	Title          string
-	Author         string
-	Subject        string
-	CompanyName    string
-	HeaderColor    []uint8 // RGB values
-	TableRowHeight float64
-	FontSize       int
-	MarginX        float64
-	MarginY        float64
-	ShowTimestamp  bool
-	ShowQuery      bool
 }

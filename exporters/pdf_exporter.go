@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 
+	"go-sql-executor/models"
+
 	"github.com/signintech/gopdf"
 )
 
@@ -153,8 +155,13 @@ func downloadFont(fontPath string) error {
 	return nil
 }
 
+// savePDFToFile saves the PDF bytes to a file.
+func SavePDFToFile(pdfBytes []byte, filename string) error {
+	return os.WriteFile(filename, pdfBytes, 0644)
+}
+
 // addQueryResultWide adds a query result to the wide format page.
-func (pg *PDFGenerator) addQueryResultWide(result QueryResult, queryNum int, startY, pageWidth float64) float64 {
+func (pg *PDFGenerator) addQueryResultWide(result models.QueryResult, queryNum int, startY, pageWidth float64) float64 {
 	currentY := startY
 
 	// Query header
@@ -211,9 +218,9 @@ func (pg *PDFGenerator) addQueryResultWide(result QueryResult, queryNum int, sta
 }
 
 // GenerateWideHorizontalPDF -  with minimal wasted space
-func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []QueryResult) ([]byte, error) {
+func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []models.QueryResult) ([]byte, error) {
 	// Find the result with the most data to calculate actual dimensions
-	var largestResult *QueryResult
+	var largestResult *models.QueryResult
 	maxRows := 0
 
 	for _, result := range results {
@@ -318,7 +325,7 @@ func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []QueryResult) ([]byte
 }
 
 // calculateWideColumnWidths - for exact width calculation
-func (pg *PDFGenerator) calculateWideColumnWidths(data *QueryData, pageWidth float64) []float64 {
+func (pg *PDFGenerator) calculateWideColumnWidths(data *models.QueryData, pageWidth float64) []float64 {
 	numCols := len(data.Columns)
 	if numCols == 0 {
 		return []float64{}
@@ -361,7 +368,7 @@ func (pg *PDFGenerator) calculateWideColumnWidths(data *QueryData, pageWidth flo
 }
 
 // addWideTable - with precise width usage
-func (pg *PDFGenerator) addWideTable(data *QueryData, startY, pageWidth float64) float64 {
+func (pg *PDFGenerator) addWideTable(data *models.QueryData, startY, pageWidth float64) float64 {
 	if len(data.Columns) == 0 || len(data.Rows) == 0 {
 		return startY
 	}
@@ -389,7 +396,7 @@ func (pg *PDFGenerator) addWideTable(data *QueryData, startY, pageWidth float64)
 }
 
 // drawWideTableRows draws all table rows for wide layout - NO TRUNCATION VERSION.
-func (pg *PDFGenerator) drawWideTableRows(data *QueryData, colWidths []float64, startY float64) float64 {
+func (pg *PDFGenerator) drawWideTableRows(data *models.QueryData, colWidths []float64, startY float64) float64 {
 	if len(data.Rows) == 0 {
 		return startY
 	}
