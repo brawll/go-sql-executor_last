@@ -20,57 +20,99 @@ import (
 type DatabaseConnectionManager models.DatabaseConnectionManager
 type ConnectionHandler models.ConnectionHandler
 
-// Capture schema information
-func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, port int, username, password, dbName string) (*models.SchemaInfo, error) {
-	var connStr string
-	var driverName string
+// Helper function for consistent error responses
+func writeErrorResponse(w http.ResponseWriter, status int, detail string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(models.ErrorResponseConnection{Detail: detail})
+}
 
+// getConnectionInfo builds database connection string and driver for given type
+func getConnectionInfo(dbType, hostname string, port int, username, password, dbName string) (string, string) {
 	switch dbType {
 	case "PostgreSQL":
-		driverName = "postgres"
-		connStr = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 			hostname, port, username, password, dbName)
+		return connStr, "postgres"
 	case "MySQL":
-		driverName = "mysql"
-		connStr = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, hostname, port, dbName)
+		connStr := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, hostname, port, dbName)
+		return connStr, "mysql"
 	case "MSSQL":
-		driverName = "sqlserver"
-		connStr = fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s",
+		connStr := fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s",
 			hostname, port, dbName, username, password)
+		return connStr, "sqlserver"
 	default:
+		return "", ""
+	}
+}
+
+// CaptureSchema captures database schema information
+func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, port int, username, password, dbName string) (*models.SchemaInfo, error) {
+	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
+	if connStr == "" {
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	testDB, err := sql.Open(driverName, connStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open connection: %v", err)
-	}
-	defer testDB.Close()
-
 	schemaInfo := &models.SchemaInfo{Tables: make(map[string]models.TableInfo)}
+
+	// Define table query based on database type
+	var tablesQuery string
+	var tablesArgs []interface{}
+
+	var columnsQuery string
+	var columnsArgs func(string) []interface{}
 
 	switch dbType {
 	case "PostgreSQL":
-		return dcm.capturePostgreSQLSchema(testDB, schemaInfo)
+		tablesQuery = "SELECT t.table_name, t.table_type FROM information_schema.tables t WHERE t.table_schema = $1 ORDER BY t.table_name"
+		tablesArgs = []interface{}{"public"}
+
+		columnsQuery = `SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, c.character_maximum_length,
+			CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END as is_primary_key
+			FROM information_schema.columns c
+			LEFT JOIN (SELECT kc.column_name FROM information_schema.table_constraints tc
+				JOIN information_schema.key_column_usage kc ON kc.constraint_name = tc.constraint_name
+				WHERE tc.constraint_type = 'PRIMARY KEY') pk ON pk.column_name = c.column_name
+			WHERE c.table_schema = $1 AND c.table_name = $2 ORDER BY c.ordinal_position`
+
+		columnsArgs = func(tableName string) []interface{} {
+			return []interface{}{"public", tableName}
+		}
 	case "MySQL":
-		return dcm.captureMySQLSchema(testDB, dbName, schemaInfo)
+		tablesQuery = "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name"
+		tablesArgs = []interface{}{dbName}
+
+		columnsQuery = `SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, c.character_maximum_length,
+			CASE WHEN k.column_name IS NOT NULL THEN true ELSE false END as is_primary_key
+			FROM information_schema.columns c
+			LEFT JOIN information_schema.key_column_usage k ON k.table_schema = c.table_schema
+				AND k.table_name = c.table_name AND k.column_name = c.column_name AND k.constraint_name = 'PRIMARY'
+			WHERE c.table_schema = ? AND c.table_name = ? ORDER BY c.ordinal_position`
+
+		columnsArgs = func(tableName string) []interface{} {
+			return []interface{}{dbName, tableName}
+		}
 	case "MSSQL":
-		return dcm.captureMSSQLSchema(testDB, schemaInfo)
+		tablesQuery = "SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_NAME"
+		tablesArgs = []interface{}{}
+
+		columnsQuery = `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, CHARACTER_MAXIMUM_LENGTH,
+			CASE WHEN COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1 THEN 1 ELSE 0 END as is_primary_key
+			FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? ORDER BY ORDINAL_POSITION`
+
+		columnsArgs = func(tableName string) []interface{} {
+			return []interface{}{tableName}
+		}
 	}
 
-	return schemaInfo, nil
-}
+	db, err := sql.Open(driverName, connStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open connection: %v", err)
+	}
+	defer db.Close()
 
-func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schemaInfo *models.SchemaInfo) (*models.SchemaInfo, error) {
 	// Get tables
-	tablesQuery := `
-		SELECT t.table_name, t.table_type
-		FROM information_schema.tables t
-		WHERE t.table_schema = 'public'
-		ORDER BY t.table_name;
-	`
-
-	rows, err := db.Query(tablesQuery)
+	rows, err := db.Query(tablesQuery, tablesArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,46 +136,33 @@ func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schema
 
 	// Get columns for each table
 	for _, table := range tables {
-		columnsQuery := `
-			SELECT 
-				c.column_name,
-				c.data_type,
-				c.is_nullable,
-				c.column_default,
-				c.character_maximum_length,
-				CASE 
-					WHEN pk.column_name IS NOT NULL THEN true 
-					ELSE false 
-				END as is_primary_key
-			FROM information_schema.columns c
-			LEFT JOIN (
-				SELECT kc.column_name
-				FROM information_schema.table_constraints tc
-				JOIN information_schema.key_column_usage kc 
-					ON kc.constraint_name = tc.constraint_name
-				WHERE tc.constraint_type = 'PRIMARY KEY'
-				AND kc.table_name = $1
-			) pk ON pk.column_name = c.column_name
-			WHERE c.table_schema = 'public'
-			AND c.table_name = $1
-			ORDER BY c.ordinal_position;
-		`
-
-		colRows, err := db.Query(columnsQuery, table.Name)
+		colArgs := columnsArgs(table.Name)
+		colRows, err := db.Query(columnsQuery, colArgs...)
 		if err != nil {
 			return nil, err
 		}
 
 		var columns []models.ColumnInfo
 		for colRows.Next() {
-			var col models.ColumnInfo
+			col := models.ColumnInfo{}
 			var maxLength sql.NullInt64
 			var defaultVal sql.NullString
+			var pkVal bool
 
-			err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &col.IsPrimaryKey)
-			if err != nil {
-				colRows.Close()
-				return nil, err
+			switch dbType {
+			case "MSSQL":
+				var isPK int
+				if err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &isPK); err != nil {
+					colRows.Close()
+					return nil, err
+				}
+				col.IsPrimaryKey = isPK == 1
+			default:
+				if err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &pkVal); err != nil {
+					colRows.Close()
+					return nil, err
+				}
+				col.IsPrimaryKey = pkVal
 			}
 
 			if defaultVal.Valid {
@@ -142,187 +171,6 @@ func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schema
 			if maxLength.Valid {
 				col.MaxLength = maxLength.Int64
 			}
-
-			columns = append(columns, col)
-		}
-		colRows.Close()
-
-		schemaInfo.Tables[table.Name] = models.TableInfo{
-			Type:    table.Type,
-			Columns: columns,
-		}
-	}
-
-	return schemaInfo, nil
-}
-
-func (dcm *DatabaseConnectionManager) captureMySQLSchema(db *sql.DB, dbName string, schemaInfo *models.SchemaInfo) (*models.SchemaInfo, error) {
-	// Get tables
-	tablesQuery := `
-		SELECT table_name, table_type
-		FROM information_schema.tables 
-		WHERE table_schema = ?
-		ORDER BY table_name;
-	`
-
-	rows, err := db.Query(tablesQuery, dbName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tables []struct {
-		Name string
-		Type string
-	}
-
-	for rows.Next() {
-		var tableName, tableType string
-		if err := rows.Scan(&tableName, &tableType); err != nil {
-			return nil, err
-		}
-		tables = append(tables, struct {
-			Name string
-			Type string
-		}{tableName, tableType})
-	}
-
-	// Get columns for each table
-	for _, table := range tables {
-		columnsQuery := `
-			SELECT 
-				c.column_name,
-				c.data_type,
-				c.is_nullable,
-				c.column_default,
-				c.character_maximum_length,
-				CASE 
-					WHEN k.column_name IS NOT NULL THEN true 
-					ELSE false 
-				END as is_primary_key
-			FROM information_schema.columns c
-			LEFT JOIN information_schema.key_column_usage k
-				ON k.table_schema = c.table_schema
-				AND k.table_name = c.table_name
-				AND k.column_name = c.column_name
-				AND k.constraint_name = 'PRIMARY'
-			WHERE c.table_schema = ?
-			AND c.table_name = ?
-			ORDER BY c.ordinal_position;
-		`
-
-		colRows, err := db.Query(columnsQuery, dbName, table.Name)
-		if err != nil {
-			return nil, err
-		}
-
-		var columns []models.ColumnInfo
-		for colRows.Next() {
-			var col models.ColumnInfo
-			var maxLength sql.NullInt64
-			var defaultVal sql.NullString
-
-			err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &col.IsPrimaryKey)
-			if err != nil {
-				colRows.Close()
-				return nil, err
-			}
-
-			if defaultVal.Valid {
-				col.Default = defaultVal.String
-			}
-			if maxLength.Valid {
-				col.MaxLength = maxLength.Int64
-			}
-
-			columns = append(columns, col)
-		}
-		colRows.Close()
-
-		schemaInfo.Tables[table.Name] = models.TableInfo{
-			Type:    table.Type,
-			Columns: columns,
-		}
-	}
-
-	return schemaInfo, nil
-}
-
-func (dcm *DatabaseConnectionManager) captureMSSQLSchema(db *sql.DB, schemaInfo *models.SchemaInfo) (*models.SchemaInfo, error) {
-	// Get tables
-	tablesQuery := `
-		SELECT TABLE_NAME, TABLE_TYPE
-		FROM INFORMATION_SCHEMA.TABLES
-		WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
-		ORDER BY TABLE_NAME;
-	`
-
-	rows, err := db.Query(tablesQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tables []struct {
-		Name string
-		Type string
-	}
-
-	for rows.Next() {
-		var tableName, tableType string
-		if err := rows.Scan(&tableName, &tableType); err != nil {
-			return nil, err
-		}
-		tables = append(tables, struct {
-			Name string
-			Type string
-		}{tableName, tableType})
-	}
-
-	// Get columns for each table
-	for _, table := range tables {
-		columnsQuery := `
-			SELECT 
-				COLUMN_NAME,
-				DATA_TYPE,
-				IS_NULLABLE,
-				COLUMN_DEFAULT,
-				CHARACTER_MAXIMUM_LENGTH,
-				CASE 
-					WHEN COLUMNPROPERTY(OBJECT_ID(TABLE_SCHEMA + '.' + TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1 
-					THEN 1
-					ELSE 0
-				END as is_primary_key
-			FROM INFORMATION_SCHEMA.COLUMNS
-			WHERE TABLE_NAME = ?
-			ORDER BY ORDINAL_POSITION;
-		`
-
-		colRows, err := db.Query(columnsQuery, table.Name)
-		if err != nil {
-			return nil, err
-		}
-
-		var columns []models.ColumnInfo
-		for colRows.Next() {
-			var col models.ColumnInfo
-			var maxLength sql.NullInt64
-			var defaultVal sql.NullString
-			var isPK int
-
-			err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &isPK)
-			if err != nil {
-				colRows.Close()
-				return nil, err
-			}
-
-			if defaultVal.Valid {
-				col.Default = defaultVal.String
-			}
-			if maxLength.Valid {
-				col.MaxLength = maxLength.Int64
-			}
-			col.IsPrimaryKey = isPK == 1
 
 			columns = append(columns, col)
 		}
@@ -348,23 +196,10 @@ func NewConnectionHandler(db *sql.DB) *ConnectionHandler {
 	}
 }
 
+// VerifyConnection tests database connectivity
 func (dcm *DatabaseConnectionManager) VerifyConnection(dbType, hostname string, port int, username, password, dbName string) error {
-	var connStr string
-	var driverName string
-
-	switch dbType {
-	case "PostgreSQL":
-		driverName = "postgres"
-		connStr = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-			hostname, port, username, password, dbName)
-	case "MySQL":
-		driverName = "mysql"
-		connStr = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, hostname, port, dbName)
-	case "MSSQL":
-		driverName = "sqlserver"
-		connStr = fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s",
-			hostname, port, dbName, username, password)
-	default:
+	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
+	if connStr == "" {
 		return fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
@@ -395,12 +230,9 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 	}
 
 	// Verify database connection
-	dc := (*DatabaseConnectionManager)(ch.Dcm) // Type Assertion of model type to the alias local type.
+	dc := (*DatabaseConnectionManager)(ch.Dcm)
 	if err := dc.VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName); err != nil {
-		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to establish database connection: %v", err)}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(errorResp)
+		writeErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("Failed to establish database connection: %v", err))
 		return
 	}
 
@@ -477,9 +309,9 @@ func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Reque
 		ORDER BY created_at DESC
 	`
 
-	rows, err := ch.db.Query(query)
+	rows, err := ch.Db.Query(query)
 	if err != nil {
-		errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to fetch connections: %v", err)}
+		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to fetch connections: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(errorResp)
@@ -487,13 +319,13 @@ func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Reque
 	}
 	defer rows.Close()
 
-	var connections []ConnectionResponse
+	var connections []models.ConnectionResponse
 	for rows.Next() {
-		var conn ConnectionResponse
+		var conn models.ConnectionResponse
 		err := rows.Scan(&conn.ID, &conn.ConnectionName, &conn.Username, &conn.Hostname,
 			&conn.Port, &conn.DBType, &conn.DBName, &conn.Status, &conn.CreatedAt)
 		if err != nil {
-			errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to scan connection: %v", err)}
+			errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to scan connection: %v", err)}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(errorResp)
@@ -503,7 +335,7 @@ func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Reque
 	}
 
 	if connections == nil {
-		connections = []ConnectionResponse{}
+		connections = []models.ConnectionResponse{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -549,9 +381,9 @@ func (ch *ConnectionHandler) DeleteConnection(w http.ResponseWriter, r *http.Req
 	// Check if connection exists
 	var exists bool
 	checkQuery := `SELECT EXISTS(SELECT 1 FROM user_connection.user_db_connections WHERE id = $1)`
-	err := ch.db.QueryRow(checkQuery, connectionID).Scan(&exists)
+	err := ch.Db.QueryRow(checkQuery, connectionID).Scan(&exists)
 	if err != nil {
-		errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to check connection: %v", err)}
+		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to check connection: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(errorResp)
@@ -559,7 +391,7 @@ func (ch *ConnectionHandler) DeleteConnection(w http.ResponseWriter, r *http.Req
 	}
 
 	if !exists {
-		errorResp := ErrorResponseConnection{Detail: "Connection not found"}
+		errorResp := models.ErrorResponseConnection{Detail: "Connection not found"}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(errorResp)
@@ -568,16 +400,16 @@ func (ch *ConnectionHandler) DeleteConnection(w http.ResponseWriter, r *http.Req
 
 	// Delete connection (schema will be deleted by CASCADE)
 	deleteQuery := `DELETE FROM user_connection.user_db_connections WHERE id = $1`
-	_, err = ch.db.Exec(deleteQuery, connectionID)
+	_, err = ch.Db.Exec(deleteQuery, connectionID)
 	if err != nil {
-		errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to delete connection: %v", err)}
+		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to delete connection: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(errorResp)
 		return
 	}
 
-	response := SuccessResponse{Message: "Connection deleted successfully"}
+	response := models.SuccessResponse{Message: "Connection deleted successfully"}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }

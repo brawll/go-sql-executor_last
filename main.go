@@ -78,7 +78,7 @@ func main() {
 	fmt.Printf("Successfully connected to %s! database\n", selectedDB)
 
 	//runCategoryHandler(db)
-	//startConnectionService()
+	startConnectionService(db)
 
 	// Initialize service
 	reportService := handler.NewReportService(db, generateHTML, generatePDF, exportCSV, exportExcel)
@@ -122,39 +122,7 @@ func main() {
 
 }
 
-func startConnectionService() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, relying on OS environment.")
-	}
-
-	// LOAD CONFIGURATION from environment variables
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-	dbHost := os.Getenv("DB_HOST")
-	dbName := os.Getenv("DB_NAME")
-	dbPort := os.Getenv("DB_PORT")
-	sslmode := os.Getenv("SSL_MODE")
-
-	// Get database URL from environment
-	databaseURL := fmt.Sprintf("host=%s port=%s "+
-		"user=%s password=%s "+
-		"dbname=%s sslmode=%s", dbHost, dbPort, dbUser, dbPassword, dbName, sslmode)
-	if databaseURL == "" {
-		log.Fatal("DATABASE ENV not properly configured.")
-	}
-
-	// Connect to database
-	db, err := sql.Open("postgres", databaseURL)
-	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
-	}
-	defer db.Close()
-
-	// Test connection
-	if err := db.Ping(); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
-	}
+func startConnectionService(db *sql.DB) {
 
 	// Create connection handler
 	connectionHandler := handler.NewConnectionHandler(db)
