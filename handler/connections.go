@@ -6,25 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"go-sql-executor/models"
 
-	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
-	_ "github.com/go-sql-driver/mysql"   // MySQL driver
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
 type DatabaseConnectionManager models.DatabaseConnectionManager
 type ConnectionHandler models.ConnectionHandler
 
 // Helper function for consistent error responses
-func writeErrorResponse(w http.ResponseWriter, status int, detail string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(models.ErrorResponseConnection{Detail: detail})
+func writeErrorResponse(c *gin.Context, status int, detail string) {
+	c.JSON(status, models.ErrorResponseConnection{Detail: detail})
 }
 
 // getConnectionInfo builds database connection string and driver for given type
@@ -46,10 +41,14 @@ func getConnectionInfo(dbType, hostname string, port int, username, password, db
 	}
 }
 
-// CaptureSchema captures database schema information
+// CaptureSchema captures database schema information with performance logging and optimization
 func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, port int, username, password, dbName string) (*models.SchemaInfo, error) {
+	startTime := time.Now()
+	log.Printf("🔍 Starting schema capture for %s database: %s", dbType, dbName)
+
 	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
 	if connStr == "" {
+		log.Printf("❌ Unsupported database type for schema capture: %s (took %v)", dbType, time.Since(startTime))
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
@@ -107,16 +106,30 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 
 	db, err := sql.Open(driverName, connStr)
 	if err != nil {
+		log.Printf("❌ Failed to open connection to %s database: %v (took %v)", dbType, err, time.Since(startTime))
 		return nil, fmt.Errorf("failed to open connection: %v", err)
 	}
+
+	// Configure connection pool for limited concurrent users
+	db.SetMaxOpenConns(10)                 // Max 10 concurrent connections for pool
+	db.SetMaxIdleConns(2)                  // Keep 2 idle connections ready
+	db.SetConnMaxLifetime(time.Minute * 5) // Recycle connections after 5 minutes
+
+	connectionTime := time.Now()
+	log.Printf("✅ Connected to %s database (pool configured: max=%d, idle=%d) - took %v",
+		dbType, 10, 2, connectionTime.Sub(startTime))
 	defer db.Close()
 
 	// Get tables
+	tableQueryTime := time.Now()
 	rows, err := db.Query(tablesQuery, tablesArgs...)
 	if err != nil {
+		log.Printf("❌ Failed to query tables for %s database: %v (took %v)", dbType, err, time.Since(tableQueryTime))
 		return nil, err
 	}
 	defer rows.Close()
+
+	tableScanTime := time.Now()
 
 	var tables []struct {
 		Name string
@@ -134,7 +147,12 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 		}{tableName, tableType})
 	}
 
+	log.Printf("📋 Found %d tables in %s database (scan took %v)",
+		len(tables), dbType, time.Since(tableScanTime))
+
 	// Get columns for each table
+	columnQueryStart := time.Now()
+	columnsProcessed := 0
 	for _, table := range tables {
 		colArgs := columnsArgs(table.Name)
 		colRows, err := db.Query(columnsQuery, colArgs...)
@@ -180,7 +198,11 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 			Type:    table.Type,
 			Columns: columns,
 		}
+		columnsProcessed += len(columns)
 	}
+
+	log.Printf("✅ Schema capture completed for %s database: %d tables, %d total columns (took %v total, %v for column queries)",
+		dbType, len(tables), columnsProcessed, time.Since(startTime), time.Since(columnQueryStart))
 
 	return schemaInfo, nil
 }
@@ -217,10 +239,10 @@ func (dcm *DatabaseConnectionManager) VerifyConnection(dbType, hostname string, 
 }
 
 // Create connection endpoint
-func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Request) {
+func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 	var req models.ConnectionCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"detail":"Invalid JSON"}`, http.StatusBadRequest)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, models.ErrorResponseConnection{Detail: "Invalid JSON"})
 		return
 	}
 
@@ -232,7 +254,7 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 	// Verify database connection
 	dc := (*DatabaseConnectionManager)(ch.Dcm)
 	if err := dc.VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName); err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("Failed to establish database connection: %v", err))
+		writeErrorResponse(c, 400, fmt.Sprintf("Failed to establish database connection: %v", err))
 		return
 	}
 
@@ -244,7 +266,7 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 
 	// Insert connection
 	insertQuery := `
-		INSERT INTO user_connection.user_db_connections 
+		INSERT INTO user_connection.user_db_connections
 		(id, connection_name, username, password, hostname, port, db_name, db_type, status, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
@@ -255,9 +277,7 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 		req.Hostname, req.Port, req.DBName, req.DBType, req.Status, createdAt)
 	if err != nil {
 		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to create connection: %v", err)}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(errorResp)
+		c.JSON(500, errorResp)
 		return
 	}
 
@@ -272,7 +292,7 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 		schemaID := uuid.New().String()
 
 		schemaInsertQuery := `
-			INSERT INTO copied_schema.stored_schemas 
+			INSERT INTO copied_schema.stored_schemas
 			(id, connection_id, source_db_name, captured_at, schema_json)
 			VALUES ($1, $2, $3, $4, $5)
 		`
@@ -296,13 +316,11 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 		CreatedAt:      createdAt,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	c.JSON(200, response)
 }
 
 // Get all connections endpoint
-func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Request) {
+func (ch *ConnectionHandler) GetConnections(c *gin.Context) {
 	query := `
 		SELECT id, connection_name, username, hostname, port, db_type, db_name, status, created_at
 		FROM user_connection.user_db_connections
@@ -312,9 +330,7 @@ func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Reque
 	rows, err := ch.Db.Query(query)
 	if err != nil {
 		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to fetch connections: %v", err)}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(errorResp)
+		c.JSON(500, errorResp)
 		return
 	}
 	defer rows.Close()
@@ -326,9 +342,7 @@ func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Reque
 			&conn.Port, &conn.DBType, &conn.DBName, &conn.Status, &conn.CreatedAt)
 		if err != nil {
 			errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to scan connection: %v", err)}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(errorResp)
+			c.JSON(500, errorResp)
 			return
 		}
 		connections = append(connections, conn)
@@ -338,45 +352,12 @@ func (ch *ConnectionHandler) GetConnections(w http.ResponseWriter, r *http.Reque
 		connections = []models.ConnectionResponse{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(connections)
+	c.JSON(200, connections)
 }
 
-// Get connection by ID endpoint, we may need it for testing but it's might just be redundant.
-// func (ch *ConnectionHandler) GetConnection(w http.ResponseWriter, r *http.Request) {
-// 	connectionID := r.PathValue("connection_id")
-
-// 	query := `
-// 		SELECT id, connection_name, username, hostname, port, db_type, db_name, status, created_at
-// 		FROM user_connection.user_db_connections
-// 		WHERE id = $1
-// 	`
-
-// 	var conn ConnectionResponse
-// 	err := ch.db.QueryRow(query, connectionID).Scan(&conn.ID, &conn.ConnectionName, &conn.Username,
-// 		&conn.Hostname, &conn.Port, &conn.DBType, &conn.DBName, &conn.Status, &conn.CreatedAt)
-
-// 	if err == sql.ErrNoRows {
-// 		errorResp := ErrorResponseConnection{Detail: "Connection not found"}
-// 		w.Header().Set("Content-Type", "application/json")
-// 		w.WriteHeader(http.StatusNotFound)
-// 		json.NewEncoder(w).Encode(errorResp)
-// 		return
-// 	} else if err != nil {
-// 		errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to fetch connection: %v", err)}
-// 		w.Header().Set("Content-Type", "application/json")
-// 		w.WriteHeader(http.StatusInternalServerError)
-// 		json.NewEncoder(w).Encode(errorResp)
-// 		return
-// 	}
-
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json.NewEncoder(w).Encode(conn)
-// }
-
 // Delete connection endpoint
-func (ch *ConnectionHandler) DeleteConnection(w http.ResponseWriter, r *http.Request) {
-	connectionID := r.PathValue("connection_id")
+func (ch *ConnectionHandler) DeleteConnection(c *gin.Context) {
+	connectionID := c.Param("connection_id")
 
 	// Check if connection exists
 	var exists bool
@@ -384,17 +365,13 @@ func (ch *ConnectionHandler) DeleteConnection(w http.ResponseWriter, r *http.Req
 	err := ch.Db.QueryRow(checkQuery, connectionID).Scan(&exists)
 	if err != nil {
 		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to check connection: %v", err)}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(errorResp)
+		c.JSON(500, errorResp)
 		return
 	}
 
 	if !exists {
 		errorResp := models.ErrorResponseConnection{Detail: "Connection not found"}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(errorResp)
+		c.JSON(404, errorResp)
 		return
 	}
 
@@ -403,29 +380,26 @@ func (ch *ConnectionHandler) DeleteConnection(w http.ResponseWriter, r *http.Req
 	_, err = ch.Db.Exec(deleteQuery, connectionID)
 	if err != nil {
 		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to delete connection: %v", err)}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(errorResp)
+		c.JSON(500, errorResp)
 		return
 	}
 
 	response := models.SuccessResponse{Message: "Connection deleted successfully"}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	c.JSON(200, response)
 }
 
-// CORS middleware
-func CorsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+// CORS middleware for Gin
+func CorsMiddleware() gin.HandlerFunc {
+	return gin.HandlerFunc(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(200)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		c.Next()
 	})
 }

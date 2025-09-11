@@ -1,17 +1,16 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
 	"go-sql-executor/models"
+
+	"github.com/gin-gonic/gin"
 )
 
-func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
+func (rs *ReportService) HealthCheckHandler(c *gin.Context) {
 	// Check database connection
 	dbStatus := "disconnected"
 	if rs.Db != nil {
@@ -24,7 +23,7 @@ func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Reque
 	healthStatus := "healthy"
 	if dbStatus == "disconnected" {
 		healthStatus = "unhealthy"
-		http.Error(w, `{"error":"Database connection failed"}`, http.StatusServiceUnavailable)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Database connection failed"})
 		return
 	}
 
@@ -38,6 +37,5 @@ func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Reque
 
 	fmt.Println(healthStatus)
 
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	c.JSON(http.StatusOK, response)
 }

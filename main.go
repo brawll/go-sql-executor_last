@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -77,140 +76,85 @@ func main() {
 	}
 	fmt.Printf("Successfully connected to %s! database\n", selectedDB)
 
-	//runCategoryHandler(db)
-	startConnectionService(db)
-
 	// Initialize service
 	reportService := handler.NewReportService(db, generateHTML, generatePDF, exportCSV, exportExcel)
-
-	// Setup routes
-	http.HandleFunc("/health", reportService.HealthCheckHandler)
-	http.HandleFunc("/api/v1/generate-report", reportService.GenerateReportHandler)
-
-	// Serve OpenAPI spec
-	http.HandleFunc("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/yaml")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Write(openAPISpec)
-	})
-
-	// Serve Swagger UI
-	http.HandleFunc("/docs/", httpSwagger.Handler(
-		httpSwagger.URL("/openapi.yaml"),
-	))
-
-	// Configure server
-	server := &http.Server{
-		Addr:         ":8081",
-		Handler:      nil,               // Use default ServeMux
-		ReadTimeout:  30 * time.Second,  // Prevent slow client attacks
-		WriteTimeout: 300 * time.Second, // Allow time for large file generation
-		IdleTimeout:  60 * time.Second,
-		//	MaxHeaderBytes: 1 << 20, // 1MB max header size
-	}
-
-	log.Println("Report generation service starting on :8081")
-	log.Println("Available endpoints:")
-	log.Println("  POST /api/v1/generate-report - Generate reports")
-	log.Println("  GET  /health - Health check")
-	log.Println("  GET  /docs/ - Interactive API documentation (Swagger UI)")
-	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
-
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
-	}
-
-}
-
-func startConnectionService(db *sql.DB) {
 
 	// Create connection handler
 	connectionHandler := handler.NewConnectionHandler(db)
 
-	// Setup routes with Go 1.22+ enhanced ServeMux
-	mux := http.NewServeMux()
-
-	// Apply CORS middleware
-	handler := handler.CorsMiddleware(mux)
-
-	// Connection endpoints with method and path parameter support
-	mux.HandleFunc("POST /api/connections", connectionHandler.CreateConnection)
-	mux.HandleFunc("GET /api/connections", connectionHandler.GetConnections)
-	//mux.HandleFunc("GET /api/connections/{connection_id}", connectionHandler.GetConnection)
-	mux.HandleFunc("DELETE /api/connections/{connection_id}", connectionHandler.DeleteConnection)
-
-	// Start server
-	port := os.Getenv("CONNECTION_SERVICE_PORT")
-	if port == "" {
-		port = "8000"
-	}
-
-	log.Printf("Connection handler service starting on port %s", port)
-	log.Println("Available endpoints:")
-	log.Println("  POST /api/connections - Create database connection")
-	log.Println("  GET  /api/connections - Get all connections")
-	log.Println("  DELETE /api/connections/{id} - Delete connection")
-	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
-	//log.Println("  GET  /api/connections/{id} - Get connection by ID")
-
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
-	}
-}
-
-func setupCategoryRoutes(router *gin.Engine, db *sql.DB) {
+	// Setup category handler
 	handler.InitCategoryHandler(db)
 
-	// CORS middleware
-	router.Use(func(c *gin.Context) {
+	// Setup Gin router
+	r := gin.Default()
+
+	// Apply CORS middleware
+	r.Use(gin.HandlerFunc(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
+			c.AbortWithStatus(http.StatusOK)
 			return
 		}
 
 		c.Next()
-	})
+	}))
+
+	// Setup routes
+	r.GET("/health", reportService.HealthCheckHandler)
+	r.POST("/api/v1/generate-report", reportService.GenerateReportHandler)
+
+	// Connection endpoints
+	r.POST("/api/connections", connectionHandler.CreateConnection)
+	r.GET("/api/connections", connectionHandler.GetConnections)
+	r.DELETE("/api/connections/:connection_id", connectionHandler.DeleteConnection)
 
 	// Category Management Routes
-	router.GET("/api/categories", handler.GetCategoryReports)
-	router.GET("/api/categories/:category_name", handler.GetCategoryReportsByName)
-	router.POST("/api/categories", handler.CreateCategory)
-	router.DELETE("/api/categories/:category_name/reports/:report_id", handler.DeleteCategoryReport)
-	router.PUT("/api/categories/:category_name/reports/:report_id/update-dates", handler.UpdateReportWithDates)
-	router.POST("/api/categories/:category_name/reports/:report_id/schedule", handler.ScheduleReport)
+	r.GET("/api/categories", handler.GetCategoryReports)
+	r.GET("/api/categories/:category_name", handler.GetCategoryReportsByName)
+	r.POST("/api/categories", handler.CreateCategory)
+	r.DELETE("/api/categories/:category_name/reports/:report_id", handler.DeleteCategoryReport)
+	r.PUT("/api/categories/:category_name/reports/:report_id/update-dates", handler.UpdateReportWithDates)
+	r.POST("/api/categories/:category_name/reports/:report_id/schedule", handler.ScheduleReport)
 
 	// Category Definition Routes
-	router.GET("/api/category-definitions", handler.GetCategoryDefinitions)
-	router.DELETE("/api/categories/definitions/:category_id", handler.DeleteCategory)
-}
+	r.GET("/api/category-definitions", handler.GetCategoryDefinitions)
+	r.DELETE("/api/categories/definitions/:category_id", handler.DeleteCategory)
 
-// runCategoryHandler starts the Category Handler Service independently
-func runCategoryHandler(db *sql.DB) {
+	// Serve OpenAPI spec
+	r.GET("/openapi.yaml", func(c *gin.Context) {
+		c.Header("Content-Type", "application/yaml")
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Data(http.StatusOK, "application/yaml", openAPISpec)
+	})
 
-	r := gin.Default()
+	// Serve Swagger UI
+	r.GET("/docs/*any", gin.WrapH(httpSwagger.Handler(
+		httpSwagger.URL("/openapi.yaml"),
+	)))
 
-	// Setup category routes
-	setupCategoryRoutes(r, db)
+	log.Println("Combined services starting on :8081")
+	log.Println("Available endpoints:")
+	log.Println("  POST /api/v1/generate-report - Generate reports")
+	log.Println("  GET  /health - Health check")
+	log.Println("  POST /api/connections - Create database connection")
+	log.Println("  GET  /api/connections - Get all connections")
+	log.Println("  DELETE /api/connections/:connection_id - Delete connection")
+	log.Println("  GET /api/categories - Get all category reports")
+	log.Println("  GET /api/categories/:category_name - Get reports by category")
+	log.Println("  POST /api/categories - Create new category")
+	log.Println("  DELETE /api/categories/:category_name/reports/:report_id - Delete category report")
+	log.Println("  PUT /api/categories/:category_name/reports/:report_id/update-dates - Update report dates")
+	log.Println("  POST /api/categories/:category_name/reports/:report_id/schedule - Schedule report")
+	log.Println("  GET /api/category-definitions - Get all category definitions")
+	log.Println("  DELETE /api/categories/definitions/:category_id - Delete category definition")
+	log.Println("  GET  /docs/ - Interactive API documentation (Swagger UI)")
+	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
 
-	port := os.Getenv("CATEGORY_SERVICE_PORT")
-	if port == "" {
-		port = "8000" // Different port from execute-query service
+	if err := r.Run(":8000"); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
 	}
 
-	log.Printf("Category Handler Service starting on port %s", port)
-	log.Printf("Endpoints:")
-	log.Printf("  GET /api/categories - Get all category reports")
-	log.Printf("  GET /api/categories/{category_name} - Get reports by category")
-	log.Printf("  POST /api/categories - Create new category")
-	log.Printf("  DELETE /api/categories/{category_name}/reports/{report_id} - Delete category report")
-	log.Printf("  PUT /api/categories/{category_name}/reports/{report_id}/update-dates - Update report dates")
-	log.Printf("  POST /api/categories/{category_name}/reports/{report_id}/schedule - Schedule report")
-	log.Printf("  GET /api/category-definitions - Get all category definitions")
-	log.Printf("  DELETE /api/categories/definitions/{category_id} - Delete category definition")
-
-	r.Run(":" + port)
 }

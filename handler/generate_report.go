@@ -2,7 +2,6 @@ package handler
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"go-sql-executor/exporters"
 	"log"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"go-sql-executor/models"
+
+	"github.com/gin-gonic/gin"
 )
 
 type ReportService models.ReportService
@@ -31,32 +32,26 @@ func NewReportService(db *sql.DB, generateHTML bool, generatePDF bool, exportCSV
 }
 
 // GenerateReportHandler handles HTTP requests for report generation
-func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Request) {
-	// Set content type for all responses
-	w.Header().Set("Content-Type", "application/json")
-
+func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 	// Start tracking execution time
 	startTime := time.Now()
 
 	// Verify HTTP method
-	if r.Method != http.MethodPost {
-		rs.writeErrorResponse(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
+	if c.Request.Method != http.MethodPost {
+		rs.writeErrorResponseGin(c, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 		return
 	}
 
 	// Parse request body
 	var req models.ReportRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields() // Strict JSON parsing
-
-	if err := decoder.Decode(&req); err != nil {
-		rs.writeErrorResponse(w, http.StatusBadRequest, "INVALID_JSON", "Invalid JSON payload", map[string]interface{}{"parse_error": err.Error()})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		rs.writeErrorResponseGin(c, http.StatusBadRequest, "INVALID_JSON", "Invalid JSON payload", map[string]interface{}{"parse_error": err.Error()})
 		return
 	}
 
 	// Validate request
 	if err := rs.validateRequest(&req); err != nil {
-		rs.writeErrorResponse(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "Request validation failed", map[string]interface{}{"field": "query", "reason": err.Error()})
+		rs.writeErrorResponseGin(c, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "Request validation failed", map[string]interface{}{"field": "query", "reason": err.Error()})
 		return
 	}
 
@@ -273,8 +268,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Return response
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	c.JSON(http.StatusOK, response)
 }
 
 // validateRequest validates the incoming request
@@ -285,8 +279,8 @@ func (rs *ReportService) validateRequest(req *models.ReportRequest) error {
 	return nil
 }
 
-// writeErrorResponse writes a structured error response according to OpenAPI spec
-func (rs *ReportService) writeErrorResponse(w http.ResponseWriter, statusCode int, code string, message string, details map[string]interface{}) {
+// writeErrorResponseGin writes a structured error response according to OpenAPI spec for Gin
+func (rs *ReportService) writeErrorResponseGin(c *gin.Context, statusCode int, code string, message string, details map[string]interface{}) {
 	errorResponse := models.ErrorResponse{
 		Success: false,
 		Error: models.ErrorInfo{
@@ -300,8 +294,7 @@ func (rs *ReportService) writeErrorResponse(w http.ResponseWriter, statusCode in
 		errorResponse.Error.Details = details
 	}
 
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(errorResponse)
+	c.JSON(statusCode, errorResponse)
 }
 
 // executeQuery executes a single SQL query and stores the complete result.
