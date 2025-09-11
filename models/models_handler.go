@@ -1,4 +1,4 @@
-package handler
+package models
 
 import (
 	"database/sql"
@@ -68,12 +68,12 @@ type ErrorInfo struct {
 
 // ReportService handles the core business logic
 type ReportService struct {
-	tempDir      string
-	db           *sql.DB
-	generateHTML bool
-	generatePDF  bool
-	exportCSV    bool
-	exportExcel  bool
+	TempDir      string
+	Db           *sql.DB
+	GenerateHTML bool
+	GeneratePDF  bool
+	ExportCSV    bool
+	ExportExcel  bool
 }
 
 // connections Database Models
@@ -151,11 +151,11 @@ type SchemaInfo struct {
 
 // Database Connection Manager
 type DatabaseConnectionManager struct {
-	db *sql.DB
+	Db *sql.DB
 }
 
 // Connection Handler
 type ConnectionHandler struct {
-	dcm *DatabaseConnectionManager
-	db  *sql.DB
+	Dcm *DatabaseConnectionManager
+	Db  *sql.DB
 }

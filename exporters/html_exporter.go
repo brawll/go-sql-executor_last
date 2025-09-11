@@ -3,6 +3,7 @@ package exporters
 import (
 	"bytes"
 	"fmt"
+
 	"go-sql-executor/models"
 	"html/template"
 	"os"
@@ -10,10 +11,11 @@ import (
 )
 
 // DefaultHTMLConfig returns default HTML configuration.
-func DefaultHTMLConfig() HTMLConfig {
-	return HTMLConfig{
-		Title:         "SQL Query Results",
-		CompanyName:   "Your Company",
+func DefaultHTMLConfig() models.HTMLConfig {
+	return models.HTMLConfig{
+		Title:       "SQL Query Results",
+		CompanyName: "Your Company",
+
 		HeaderColor:   "#34495e",
 		ShowTimestamp: true,
 		ShowQuery:     true,
@@ -327,10 +329,10 @@ const htmlTemplate = `
 `
 
 // Simple HTML generation function
-func GenerateHTML(config HTMLConfig, results []models.QueryResult) ([]byte, error) {
+func GenerateHTML(config models.HTMLConfig, results []models.QueryResult) ([]byte, error) {
 	// Create template with the config and results data
 	data := struct {
-		HTMLConfig
+		models.HTMLConfig
 		Results     []models.QueryResult
 		GeneratedAt string
 	}{

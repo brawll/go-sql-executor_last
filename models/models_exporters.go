@@ -1,9 +1,6 @@
-package exporters
+package models
 
-type CSVExporter struct {
-	IncludeQueryInfo bool
-	Separator        rune
-}
+// type CSVExporter is defined in the csv_exporter file as we have method dependency on that type.
 
 type HTMLConfig struct {
 	Title         string

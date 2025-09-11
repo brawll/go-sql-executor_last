@@ -8,6 +8,12 @@ import (
 	"go-sql-executor/models"
 )
 
+// CSVExporter handles exporting SQL query results to CSV format
+type CSVExporter struct {
+	IncludeQueryInfo bool
+	Separator        rune
+}
+
 // NewCSVExporter creates a new CSV exporter with default settings
 func NewCSVExporter() *CSVExporter {
 	return &CSVExporter{

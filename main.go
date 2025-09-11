@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
@@ -23,8 +24,6 @@ import (
 var openAPISpec []byte // This is a compiler directive, not a function call
 
 func main() {
-
-	startConnectionService()
 
 	generatePDF := true
 	exportCSV := true
@@ -77,6 +76,9 @@ func main() {
 		log.Fatalf("Failed to connect to the database: %v", err)
 	}
 	fmt.Printf("Successfully connected to %s! database\n", selectedDB)
+
+	//runCategoryHandler(db)
+	//startConnectionService()
 
 	// Initialize service
 	reportService := handler.NewReportService(db, generateHTML, generatePDF, exportCSV, exportExcel)
@@ -154,11 +156,6 @@ func startConnectionService() {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
 
-	// Initialize schemas and tables
-	if err := handler.InitializeSchemas(db); err != nil {
-		log.Fatalf("Failed to initialize schemas: %v", err)
-	}
-
 	// Create connection handler
 	connectionHandler := handler.NewConnectionHandler(db)
 
@@ -191,4 +188,61 @@ func startConnectionService() {
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
+}
+
+func setupCategoryRoutes(router *gin.Engine, db *sql.DB) {
+	handler.InitCategoryHandler(db)
+
+	// CORS middleware
+	router.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	})
+
+	// Category Management Routes
+	router.GET("/api/categories", handler.GetCategoryReports)
+	router.GET("/api/categories/:category_name", handler.GetCategoryReportsByName)
+	router.POST("/api/categories", handler.CreateCategory)
+	router.DELETE("/api/categories/:category_name/reports/:report_id", handler.DeleteCategoryReport)
+	router.PUT("/api/categories/:category_name/reports/:report_id/update-dates", handler.UpdateReportWithDates)
+	router.POST("/api/categories/:category_name/reports/:report_id/schedule", handler.ScheduleReport)
+
+	// Category Definition Routes
+	router.GET("/api/category-definitions", handler.GetCategoryDefinitions)
+	router.DELETE("/api/categories/definitions/:category_id", handler.DeleteCategory)
+}
+
+// runCategoryHandler starts the Category Handler Service independently
+func runCategoryHandler(db *sql.DB) {
+
+	r := gin.Default()
+
+	// Setup category routes
+	setupCategoryRoutes(r, db)
+
+	port := os.Getenv("CATEGORY_SERVICE_PORT")
+	if port == "" {
+		port = "8000" // Different port from execute-query service
+	}
+
+	log.Printf("Category Handler Service starting on port %s", port)
+	log.Printf("Endpoints:")
+	log.Printf("  GET /api/categories - Get all category reports")
+	log.Printf("  GET /api/categories/{category_name} - Get reports by category")
+	log.Printf("  POST /api/categories - Create new category")
+	log.Printf("  DELETE /api/categories/{category_name}/reports/{report_id} - Delete category report")
+	log.Printf("  PUT /api/categories/{category_name}/reports/{report_id}/update-dates - Update report dates")
+	log.Printf("  POST /api/categories/{category_name}/reports/{report_id}/schedule - Schedule report")
+	log.Printf("  GET /api/category-definitions - Get all category definitions")
+	log.Printf("  DELETE /api/categories/definitions/{category_id} - Delete category definition")
+
+	r.Run(":" + port)
 }

@@ -15,16 +15,18 @@ import (
 	"go-sql-executor/models"
 )
 
+type ReportService models.ReportService
+
 // NewReportService creates a new instance of ReportService
 func NewReportService(db *sql.DB, generateHTML bool, generatePDF bool, exportCSV bool, exportExcel bool) *ReportService {
 	tempDir := os.TempDir()
 	return &ReportService{
-		tempDir:      tempDir,
-		db:           db,
-		generateHTML: generateHTML,
-		generatePDF:  generatePDF,
-		exportCSV:    exportCSV,
-		exportExcel:  exportExcel,
+		TempDir:      tempDir,
+		Db:           db,
+		GenerateHTML: generateHTML,
+		GeneratePDF:  generatePDF,
+		ExportCSV:    exportCSV,
+		ExportExcel:  exportExcel,
 	}
 }
 
@@ -43,7 +45,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Parse request body
-	var req ReportRequest
+	var req models.ReportRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields() // Strict JSON parsing
 
@@ -67,7 +69,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 
 	for _, query := range queries {
 		wg.Add(1)
-		go executeQuery(&wg, rs.db, query, resultChan)
+		go executeQuery(&wg, rs.Db, query, resultChan)
 	}
 
 	wg.Wait()
@@ -80,11 +82,11 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Generate files and collect file information
-	var files []FileInfo
+	var files []models.FileInfo
 	var errors []string
 
 	// Export CSV
-	if rs.exportCSV {
+	if rs.ExportCSV {
 		fmt.Printf("Generating CSV report...\n")
 		csvExporter := exporters.NewCSVExporter()
 		csvFilename := "query_results_combined.csv"
@@ -93,7 +95,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 			log.Printf("Failed to export CSV: %v", err)
 			errors = append(errors, fmt.Sprintf("CSV export failed: %v", err))
 		} else {
-			fileInfo := FileInfo{
+			fileInfo := models.FileInfo{
 				Type:     "csv",
 				Filename: csvFilename,
 			}
@@ -115,7 +117,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Export Excel
-	if rs.exportExcel && len(results) > 0 {
+	if rs.ExportExcel && len(results) > 0 {
 		result := results[0] // Process first result
 		excelFilename := "query_results.xlsx"
 
@@ -123,7 +125,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 			log.Printf("Failed to export Excel: %v", err)
 			errors = append(errors, fmt.Sprintf("Excel export failed: %v", err))
 		} else {
-			fileInfo := FileInfo{
+			fileInfo := models.FileInfo{
 				Type:     "excel",
 				Filename: excelFilename,
 			}
@@ -144,7 +146,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Generate HTML
-	if rs.generateHTML {
+	if rs.GenerateHTML {
 		fmt.Printf("Generating HTML report...\n")
 
 		htmlConfig := exporters.DefaultHTMLConfig()
@@ -164,7 +166,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 				log.Printf("Failed to save HTML: %v", err)
 				errors = append(errors, fmt.Sprintf("HTML save failed: %v", err))
 			} else {
-				fileInfo := FileInfo{
+				fileInfo := models.FileInfo{
 					Type:      "html",
 					Filename:  htmlOutputFile,
 					SizeBytes: int64(len(htmlBytes)),
@@ -185,7 +187,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Generate PDF
-	if rs.generatePDF {
+	if rs.GeneratePDF {
 		fmt.Printf("Generating PDF report...\n")
 
 		pdfConfig := exporters.DefaultPDFConfig()
@@ -209,7 +211,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 				log.Printf("Failed to save PDF: %v", err)
 				errors = append(errors, fmt.Sprintf("PDF save failed: %v", err))
 			} else {
-				fileInfo := FileInfo{
+				fileInfo := models.FileInfo{
 					Type:      "pdf",
 					Filename:  pdfOutputFile,
 					SizeBytes: int64(len(pdfBytes)),
@@ -242,7 +244,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	summary := ExecutionSummary{
+	summary := models.ExecutionSummary{
 		TotalQueries:       len(results),
 		SuccessfulQueries:  successfulQueries,
 		FailedQueries:      failedQueries,
@@ -250,7 +252,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	// Prepare response
-	response := ReportResponse{
+	response := models.ReportResponse{
 		Success: len(errors) == 0,
 		Files:   files,
 		Summary: summary,
@@ -276,7 +278,7 @@ func (rs *ReportService) GenerateReportHandler(w http.ResponseWriter, r *http.Re
 }
 
 // validateRequest validates the incoming request
-func (rs *ReportService) validateRequest(req *ReportRequest) error {
+func (rs *ReportService) validateRequest(req *models.ReportRequest) error {
 	if req.Query == "" {
 		return fmt.Errorf("query is required")
 	}
@@ -285,9 +287,9 @@ func (rs *ReportService) validateRequest(req *ReportRequest) error {
 
 // writeErrorResponse writes a structured error response according to OpenAPI spec
 func (rs *ReportService) writeErrorResponse(w http.ResponseWriter, statusCode int, code string, message string, details map[string]interface{}) {
-	errorResponse := ErrorResponse{
+	errorResponse := models.ErrorResponse{
 		Success: false,
-		Error: ErrorInfo{
+		Error: models.ErrorInfo{
 			Code:    code,
 			Message: message,
 		},

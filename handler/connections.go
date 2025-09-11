@@ -9,14 +9,19 @@ import (
 	"net/http"
 	"time"
 
+	"go-sql-executor/models"
+
 	_ "github.com/denisenkom/go-mssqldb" // MSSQL driver
 	_ "github.com/go-sql-driver/mysql"   // MySQL driver
 	"github.com/google/uuid"
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
+type DatabaseConnectionManager models.DatabaseConnectionManager
+type ConnectionHandler models.ConnectionHandler
+
 // Capture schema information
-func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, port int, username, password, dbName string) (*SchemaInfo, error) {
+func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, port int, username, password, dbName string) (*models.SchemaInfo, error) {
 	var connStr string
 	var driverName string
 
@@ -42,7 +47,7 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 	}
 	defer testDB.Close()
 
-	schemaInfo := &SchemaInfo{Tables: make(map[string]TableInfo)}
+	schemaInfo := &models.SchemaInfo{Tables: make(map[string]models.TableInfo)}
 
 	switch dbType {
 	case "PostgreSQL":
@@ -56,7 +61,7 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 	return schemaInfo, nil
 }
 
-func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schemaInfo *SchemaInfo) (*SchemaInfo, error) {
+func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schemaInfo *models.SchemaInfo) (*models.SchemaInfo, error) {
 	// Get tables
 	tablesQuery := `
 		SELECT t.table_name, t.table_type
@@ -119,9 +124,9 @@ func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schema
 			return nil, err
 		}
 
-		var columns []ColumnInfo
+		var columns []models.ColumnInfo
 		for colRows.Next() {
-			var col ColumnInfo
+			var col models.ColumnInfo
 			var maxLength sql.NullInt64
 			var defaultVal sql.NullString
 
@@ -142,7 +147,7 @@ func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schema
 		}
 		colRows.Close()
 
-		schemaInfo.Tables[table.Name] = TableInfo{
+		schemaInfo.Tables[table.Name] = models.TableInfo{
 			Type:    table.Type,
 			Columns: columns,
 		}
@@ -151,7 +156,7 @@ func (dcm *DatabaseConnectionManager) capturePostgreSQLSchema(db *sql.DB, schema
 	return schemaInfo, nil
 }
 
-func (dcm *DatabaseConnectionManager) captureMySQLSchema(db *sql.DB, dbName string, schemaInfo *SchemaInfo) (*SchemaInfo, error) {
+func (dcm *DatabaseConnectionManager) captureMySQLSchema(db *sql.DB, dbName string, schemaInfo *models.SchemaInfo) (*models.SchemaInfo, error) {
 	// Get tables
 	tablesQuery := `
 		SELECT table_name, table_type
@@ -211,9 +216,9 @@ func (dcm *DatabaseConnectionManager) captureMySQLSchema(db *sql.DB, dbName stri
 			return nil, err
 		}
 
-		var columns []ColumnInfo
+		var columns []models.ColumnInfo
 		for colRows.Next() {
-			var col ColumnInfo
+			var col models.ColumnInfo
 			var maxLength sql.NullInt64
 			var defaultVal sql.NullString
 
@@ -234,7 +239,7 @@ func (dcm *DatabaseConnectionManager) captureMySQLSchema(db *sql.DB, dbName stri
 		}
 		colRows.Close()
 
-		schemaInfo.Tables[table.Name] = TableInfo{
+		schemaInfo.Tables[table.Name] = models.TableInfo{
 			Type:    table.Type,
 			Columns: columns,
 		}
@@ -243,7 +248,7 @@ func (dcm *DatabaseConnectionManager) captureMySQLSchema(db *sql.DB, dbName stri
 	return schemaInfo, nil
 }
 
-func (dcm *DatabaseConnectionManager) captureMSSQLSchema(db *sql.DB, schemaInfo *SchemaInfo) (*SchemaInfo, error) {
+func (dcm *DatabaseConnectionManager) captureMSSQLSchema(db *sql.DB, schemaInfo *models.SchemaInfo) (*models.SchemaInfo, error) {
 	// Get tables
 	tablesQuery := `
 		SELECT TABLE_NAME, TABLE_TYPE
@@ -298,9 +303,9 @@ func (dcm *DatabaseConnectionManager) captureMSSQLSchema(db *sql.DB, schemaInfo 
 			return nil, err
 		}
 
-		var columns []ColumnInfo
+		var columns []models.ColumnInfo
 		for colRows.Next() {
-			var col ColumnInfo
+			var col models.ColumnInfo
 			var maxLength sql.NullInt64
 			var defaultVal sql.NullString
 			var isPK int
@@ -323,7 +328,7 @@ func (dcm *DatabaseConnectionManager) captureMSSQLSchema(db *sql.DB, schemaInfo 
 		}
 		colRows.Close()
 
-		schemaInfo.Tables[table.Name] = TableInfo{
+		schemaInfo.Tables[table.Name] = models.TableInfo{
 			Type:    table.Type,
 			Columns: columns,
 		}
@@ -332,14 +337,14 @@ func (dcm *DatabaseConnectionManager) captureMSSQLSchema(db *sql.DB, schemaInfo 
 	return schemaInfo, nil
 }
 
-func NewDatabaseConnectionManager(db *sql.DB) *DatabaseConnectionManager {
-	return &DatabaseConnectionManager{db: db}
+func NewDatabaseConnectionManager(db *sql.DB) *models.DatabaseConnectionManager {
+	return &models.DatabaseConnectionManager{Db: db}
 }
 
 func NewConnectionHandler(db *sql.DB) *ConnectionHandler {
 	return &ConnectionHandler{
-		dcm: NewDatabaseConnectionManager(db),
-		db:  db,
+		Dcm: NewDatabaseConnectionManager(db),
+		Db:  db,
 	}
 }
 
@@ -378,7 +383,7 @@ func (dcm *DatabaseConnectionManager) VerifyConnection(dbType, hostname string, 
 
 // Create connection endpoint
 func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Request) {
-	var req ConnectionCreateRequest
+	var req models.ConnectionCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"detail":"Invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -390,8 +395,9 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 	}
 
 	// Verify database connection
-	if err := ch.dcm.VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName); err != nil {
-		errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to establish database connection: %v", err)}
+	dc := (*DatabaseConnectionManager)(ch.Dcm) // Type Assertion of model type to the alias local type.
+	if err := dc.VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName); err != nil {
+		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to establish database connection: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(errorResp)
@@ -412,10 +418,11 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 	`
 
 	createdAt := time.Now()
-	_, err := ch.db.Exec(insertQuery, connectionID, req.ConnectionName, req.Username, encodedPassword,
+
+	_, err := ch.Db.Exec(insertQuery, connectionID, req.ConnectionName, req.Username, encodedPassword,
 		req.Hostname, req.Port, req.DBName, req.DBType, req.Status, createdAt)
 	if err != nil {
-		errorResp := ErrorResponseConnection{Detail: fmt.Sprintf("Failed to create connection: %v", err)}
+		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to create connection: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(errorResp)
@@ -423,7 +430,8 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 	}
 
 	// Capture schema
-	schemaInfo, err := ch.dcm.CaptureSchema(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
+	dc2 := (*DatabaseConnectionManager)(ch.Dcm)
+	schemaInfo, err := dc2.CaptureSchema(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
 	if err != nil {
 		log.Printf("Warning: Failed to capture schema: %v", err)
 	} else {
@@ -437,14 +445,14 @@ func (ch *ConnectionHandler) CreateConnection(w http.ResponseWriter, r *http.Req
 			VALUES ($1, $2, $3, $4, $5)
 		`
 
-		_, err = ch.db.Exec(schemaInsertQuery, schemaID, connectionID, req.DBName, createdAt, string(schemaJSON))
+		_, err = ch.Db.Exec(schemaInsertQuery, schemaID, connectionID, req.DBName, createdAt, string(schemaJSON))
 		if err != nil {
 			log.Printf("Warning: Failed to store schema: %v", err)
 		}
 	}
 
 	// Return response
-	response := ConnectionResponse{
+	response := models.ConnectionResponse{
 		ID:             connectionID,
 		ConnectionName: req.ConnectionName,
 		Username:       req.Username,
@@ -588,49 +596,4 @@ func CorsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// Initialize database schemas
-func InitializeSchemas(db *sql.DB) error {
-	schemas := []string{
-		"CREATE SCHEMA IF NOT EXISTS user_connection",
-		"CREATE SCHEMA IF NOT EXISTS copied_schema",
-	}
-
-	for _, schema := range schemas {
-		if _, err := db.Exec(schema); err != nil {
-			return fmt.Errorf("failed to create schema: %v", err)
-		}
-	}
-
-	// Create tables
-	createTables := []string{
-		`CREATE TABLE IF NOT EXISTS user_connection.user_db_connections (
-			id UUID PRIMARY KEY,
-			connection_name VARCHAR(100) NOT NULL,
-			username VARCHAR(100) NOT NULL,
-			password VARCHAR(255) NOT NULL,
-			hostname VARCHAR(255) NOT NULL,
-			port INTEGER NOT NULL,
-			db_name VARCHAR(100) NOT NULL,
-			db_type VARCHAR(50) NOT NULL,
-			status VARCHAR(50) DEFAULT 'active',
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS copied_schema.stored_schemas (
-			id UUID PRIMARY KEY,
-			connection_id UUID UNIQUE REFERENCES user_connection.user_db_connections(id) ON DELETE CASCADE,
-			source_db_name VARCHAR(255) NOT NULL,
-			captured_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-			schema_json JSONB NOT NULL
-		)`,
-	}
-
-	for _, createTable := range createTables {
-		if _, err := db.Exec(createTable); err != nil {
-			return fmt.Errorf("failed to create table: %v", err)
-		}
-	}
-
-	return nil
 }

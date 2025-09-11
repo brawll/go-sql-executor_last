@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"go-sql-executor/models"
 )
 
 func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
@@ -12,8 +14,8 @@ func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Reque
 
 	// Check database connection
 	dbStatus := "disconnected"
-	if rs.db != nil {
-		if err := rs.db.Ping(); err == nil {
+	if rs.Db != nil {
+		if err := rs.Db.Ping(); err == nil {
 			dbStatus = "connected"
 		}
 	}
@@ -26,7 +28,7 @@ func (rs *ReportService) HealthCheckHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	response := HealthResponse{
+	response := models.HealthResponse{
 		Status:    healthStatus,
 		Timestamp: time.Now().Format(time.RFC3339),
 		Service:   "report-generator",

@@ -15,12 +15,12 @@ import (
 // PDFGenerator handles PDF creation for query results.
 type PDFGenerator struct {
 	pdf    *gopdf.GoPdf
-	config PDFConfig
+	config models.PDFConfig
 }
 
 // DefaultPDFConfig returns default PDF configuration for wide horizontal layout.
-func DefaultPDFConfig() PDFConfig {
-	return PDFConfig{
+func DefaultPDFConfig() models.PDFConfig {
+	return models.PDFConfig{
 		Title:          "SQL Query Results",
 		Author:         "SQL Executor",
 		Subject:        "Database Query Report",
@@ -36,7 +36,7 @@ func DefaultPDFConfig() PDFConfig {
 }
 
 // NewPDFGenerator creates a new PDF generator instance.
-func NewPDFGenerator(config PDFConfig) *PDFGenerator {
+func NewPDFGenerator(config models.PDFConfig) *PDFGenerator {
 	return &PDFGenerator{
 		config: config,
 	}
