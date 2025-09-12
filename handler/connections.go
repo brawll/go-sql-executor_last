@@ -110,14 +110,14 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 		return nil, fmt.Errorf("failed to open connection: %v", err)
 	}
 
-	// Configure connection pool for limited concurrent users
-	db.SetMaxOpenConns(10)                 // Max 10 concurrent connections for pool
-	db.SetMaxIdleConns(2)                  // Keep 2 idle connections ready
-	db.SetConnMaxLifetime(time.Minute * 5) // Recycle connections after 5 minutes
+	// Configure minimal connection pool for schema capture (for speed)
+	db.SetMaxOpenConns(1)                  // Only 1 connection needed
+	db.SetMaxIdleConns(0)                  // No idle connections
+	db.SetConnMaxLifetime(time.Minute * 1) // Shorter lifetime
 
 	connectionTime := time.Now()
 	log.Printf("✅ Connected to %s database (pool configured: max=%d, idle=%d) - took %v",
-		dbType, 10, 2, connectionTime.Sub(startTime))
+		dbType, 1, 0, connectionTime.Sub(startTime))
 	defer db.Close()
 
 	// Get tables
@@ -281,27 +281,29 @@ func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 		return
 	}
 
-	// Capture schema
-	dc2 := (*DatabaseConnectionManager)(ch.Dcm)
-	schemaInfo, err := dc2.CaptureSchema(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
-	if err != nil {
-		log.Printf("Warning: Failed to capture schema: %v", err)
-	} else {
-		// Store schema
-		schemaJSON, _ := json.Marshal(schemaInfo)
-		schemaID := uuid.New().String()
-
-		schemaInsertQuery := `
-			INSERT INTO copied_schema.stored_schemas
-			(id, connection_id, source_db_name, captured_at, schema_json)
-			VALUES ($1, $2, $3, $4, $5)
-		`
-
-		_, err = ch.Db.Exec(schemaInsertQuery, schemaID, connectionID, req.DBName, createdAt, string(schemaJSON))
+	// Capture schema asynchronously (non-blocking)
+	go func() {
+		dc2 := (*DatabaseConnectionManager)(ch.Dcm)
+		schemaInfo, err := dc2.CaptureSchema(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
 		if err != nil {
-			log.Printf("Warning: Failed to store schema: %v", err)
+			log.Printf("Warning: Failed to capture schema: %v", err)
+		} else {
+			// Store schema
+			schemaJSON, _ := json.Marshal(schemaInfo)
+			schemaID := uuid.New().String()
+
+			schemaInsertQuery := `
+				INSERT INTO copied_schema.stored_schemas
+				(id, connection_id, source_db_name, captured_at, schema_json)
+				VALUES ($1, $2, $3, $4, $5)
+			`
+
+			_, err = ch.Db.Exec(schemaInsertQuery, schemaID, connectionID, req.DBName, createdAt, string(schemaJSON))
+			if err != nil {
+				log.Printf("Warning: Failed to store schema: %v", err)
+			}
 		}
-	}
+	}()
 
 	// Return response
 	response := models.ConnectionResponse{
