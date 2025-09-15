@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -42,15 +44,15 @@ func getConnectionInfo(dbType, hostname string, port int, username, password, db
 }
 
 // CaptureSchema captures database schema information with performance logging and optimization
-func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, port int, username, password, dbName string) (*models.SchemaInfo, error) {
+func (dcm *DatabaseConnectionManager) CaptureSchema(db *sql.DB, dbType string, dbName string) (*models.SchemaInfo, error) {
 	startTime := time.Now()
 	log.Printf("🔍 Starting schema capture for %s database: %s", dbType, dbName)
 
-	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
-	if connStr == "" {
-		log.Printf("❌ Unsupported database type for schema capture: %s (took %v)", dbType, time.Since(startTime))
-		return nil, fmt.Errorf("unsupported database type: %s", dbType)
-	}
+	// Configure minimal connection pool for schema capture (for speed)
+	db.SetMaxOpenConns(10)                 // Only 1 connection needed
+	db.SetMaxIdleConns(2)                  // No idle connections
+	db.SetConnMaxLifetime(time.Minute * 1) // Shorter lifetime
+	defer db.Close()
 
 	schemaInfo := &models.SchemaInfo{Tables: make(map[string]models.TableInfo)}
 
@@ -103,22 +105,6 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(dbType, hostname string, por
 			return []interface{}{tableName}
 		}
 	}
-
-	db, err := sql.Open(driverName, connStr)
-	if err != nil {
-		log.Printf("❌ Failed to open connection to %s database: %v (took %v)", dbType, err, time.Since(startTime))
-		return nil, fmt.Errorf("failed to open connection: %v", err)
-	}
-
-	// Configure minimal connection pool for schema capture (for speed)
-	db.SetMaxOpenConns(1)                  // Only 1 connection needed
-	db.SetMaxIdleConns(0)                  // No idle connections
-	db.SetConnMaxLifetime(time.Minute * 1) // Shorter lifetime
-
-	connectionTime := time.Now()
-	log.Printf("✅ Connected to %s database (pool configured: max=%d, idle=%d) - took %v",
-		dbType, 1, 0, connectionTime.Sub(startTime))
-	defer db.Close()
 
 	// Get tables
 	tableQueryTime := time.Now()
@@ -218,30 +204,37 @@ func NewConnectionHandler(db *sql.DB) *ConnectionHandler {
 	}
 }
 
-// VerifyConnection tests database connectivity
-func (dcm *DatabaseConnectionManager) VerifyConnection(dbType, hostname string, port int, username, password, dbName string) error {
+// VerifyConnection tests database connectivity and returns the open connection
+func VerifyConnection(dbType, hostname string, port int, username, password, dbName string) (*sql.DB, error) {
 	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
 	if connStr == "" {
-		return fmt.Errorf("unsupported database type: %s", dbType)
+		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
 	testDB, err := sql.Open(driverName, connStr)
 	if err != nil {
-		return fmt.Errorf("failed to open connection: %v", err)
-	}
-	defer testDB.Close()
-
-	if err := testDB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %v", err)
+		return nil, fmt.Errorf("failed to open connection: %v", err)
 	}
 
-	return nil
+	// Use a bounded context to ping
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	if err := testDB.PingContext(ctx); err != nil {
+		testDB.Close() // Close before returning error
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("db ping timed out after 4s: %w", err)
+		}
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	return testDB, nil
 }
 
 // Create connection endpoint
 func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 	var req models.ConnectionCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if bindErr := c.ShouldBindJSON(&req); bindErr != nil {
 		c.JSON(400, models.ErrorResponseConnection{Detail: "Invalid JSON"})
 		return
 	}
@@ -251,9 +244,8 @@ func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 		req.Status = "active"
 	}
 
-	// Verify database connection
-	dc := (*DatabaseConnectionManager)(ch.Dcm)
-	if err := dc.VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName); err != nil {
+	validatedDB, err := VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
+	if err != nil {
 		writeErrorResponse(c, 400, fmt.Sprintf("Failed to establish database connection: %v", err))
 		return
 	}
@@ -273,20 +265,20 @@ func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 
 	createdAt := time.Now()
 
-	_, err := ch.Db.Exec(insertQuery, connectionID, req.ConnectionName, req.Username, encodedPassword,
+	_, err2 := ch.Db.Exec(insertQuery, connectionID, req.ConnectionName, req.Username, encodedPassword,
 		req.Hostname, req.Port, req.DBName, req.DBType, req.Status, createdAt)
-	if err != nil {
-		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to create connection: %v", err)}
+	if err2 != nil {
+		errorResp := models.ErrorResponseConnection{Detail: fmt.Sprintf("Failed to add new connection: %v", err)}
 		c.JSON(500, errorResp)
 		return
 	}
 
 	// Capture schema asynchronously (non-blocking)
-	go func() {
-		dc2 := (*DatabaseConnectionManager)(ch.Dcm)
-		schemaInfo, err := dc2.CaptureSchema(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
-		if err != nil {
-			log.Printf("Warning: Failed to capture schema: %v", err)
+	go func(schemaDB *sql.DB) {
+		dc := (*DatabaseConnectionManager)(ch.Dcm)
+		schemaInfo, captureErr := dc.CaptureSchema(schemaDB, req.DBType, req.DBName)
+		if captureErr != nil {
+			log.Printf("Warning: Failed to capture schema: %v", captureErr)
 		} else {
 			// Store schema
 			schemaJSON, _ := json.Marshal(schemaInfo)
@@ -298,12 +290,12 @@ func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 				VALUES ($1, $2, $3, $4, $5)
 			`
 
-			_, err = ch.Db.Exec(schemaInsertQuery, schemaID, connectionID, req.DBName, createdAt, string(schemaJSON))
-			if err != nil {
-				log.Printf("Warning: Failed to store schema: %v", err)
+			_, insertErr := ch.Db.Exec(schemaInsertQuery, schemaID, connectionID, req.DBName, createdAt, string(schemaJSON))
+			if insertErr != nil {
+				log.Printf("Warning: Failed to store schema: %v", insertErr)
 			}
 		}
-	}()
+	}(validatedDB)
 
 	// Return response
 	response := models.ConnectionResponse{

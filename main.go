@@ -79,10 +79,9 @@ func main() {
 	// Initialize service
 	reportService := handler.NewReportService(db, generateHTML, generatePDF, exportCSV, exportExcel)
 
-	// Create connection handler
+	// Setup handlers with database
+	templatesHandler := handler.NewTemplatesHandler(db)
 	connectionHandler := handler.NewConnectionHandler(db)
-
-	// Setup category handler
 	handler.InitCategoryHandler(db)
 
 	// Setup Gin router
@@ -95,7 +94,7 @@ func main() {
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusOK)
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 
@@ -123,6 +122,13 @@ func main() {
 	r.GET("/api/category-definitions", handler.GetCategoryDefinitions)
 	r.DELETE("/api/categories/definitions/:category_id", handler.DeleteCategory)
 
+	// Templates Management Routes
+	r.GET("/api/templates", templatesHandler.GetTemplates)
+	r.POST("/api/templates", templatesHandler.CreateTemplate)
+	r.GET("/api/templates/:id", templatesHandler.GetTemplate)
+	r.PUT("/api/templates/:id", templatesHandler.UpdateTemplate)
+	r.DELETE("/api/templates/:id", templatesHandler.DeleteTemplate)
+
 	// Serve OpenAPI spec
 	r.GET("/openapi.yaml", func(c *gin.Context) {
 		c.Header("Content-Type", "application/yaml")
@@ -135,7 +141,7 @@ func main() {
 		httpSwagger.URL("/openapi.yaml"),
 	)))
 
-	log.Println("Combined services starting on :8081")
+	log.Println("Combined services starting on :8000")
 	log.Println("Available endpoints:")
 	log.Println("  POST /api/v1/generate-report - Generate reports")
 	log.Println("  GET  /health - Health check")
@@ -150,6 +156,11 @@ func main() {
 	log.Println("  POST /api/categories/:category_name/reports/:report_id/schedule - Schedule report")
 	log.Println("  GET /api/category-definitions - Get all category definitions")
 	log.Println("  DELETE /api/categories/definitions/:category_id - Delete category definition")
+	log.Println("  GET /api/templates - Get all report templates")
+	log.Println("  POST /api/templates - Create a new report template")
+	log.Println("  GET /api/templates/:id - Get specific template by ID")
+	log.Println("  PUT /api/templates/:id - Update an existing template")
+	log.Println("  DELETE /api/templates/:id - Delete a template")
 	log.Println("  GET  /docs/ - Interactive API documentation (Swagger UI)")
 	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
 

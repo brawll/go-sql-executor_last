@@ -16,3 +16,5 @@ query.http
 go-sql-executor.exe
 
 swagger-ui-5.28.1/
+
+bin/
