@@ -1,16 +1,15 @@
 package handler
 
 import (
-	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"go-sql-executor/models"
+	"go-sql-executor/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -22,25 +21,6 @@ type ConnectionHandler models.ConnectionHandler
 // Helper function for consistent error responses
 func writeErrorResponse(c *gin.Context, status int, detail string) {
 	c.JSON(status, models.ErrorResponseConnection{Detail: detail})
-}
-
-// getConnectionInfo builds database connection string and driver for given type
-func getConnectionInfo(dbType, hostname string, port int, username, password, dbName string) (string, string) {
-	switch dbType {
-	case "PostgreSQL":
-		connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-			hostname, port, username, password, dbName)
-		return connStr, "postgres"
-	case "MySQL":
-		connStr := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", username, password, hostname, port, dbName)
-		return connStr, "mysql"
-	case "MSSQL":
-		connStr := fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s",
-			hostname, port, dbName, username, password)
-		return connStr, "sqlserver"
-	default:
-		return "", ""
-	}
 }
 
 // CaptureSchema captures database schema information with performance logging and optimization
@@ -204,33 +184,6 @@ func NewConnectionHandler(db *sql.DB) *ConnectionHandler {
 	}
 }
 
-// VerifyConnection tests database connectivity and returns the open connection
-func VerifyConnection(dbType, hostname string, port int, username, password, dbName string) (*sql.DB, error) {
-	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
-	if connStr == "" {
-		return nil, fmt.Errorf("unsupported database type: %s", dbType)
-	}
-
-	testDB, err := sql.Open(driverName, connStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open connection: %v", err)
-	}
-
-	// Use a bounded context to ping
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-
-	if err := testDB.PingContext(ctx); err != nil {
-		testDB.Close() // Close before returning error
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("db ping timed out after 4s: %w", err)
-		}
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	return testDB, nil
-}
-
 // Create connection endpoint
 func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 	var req models.ConnectionCreateRequest
@@ -244,7 +197,7 @@ func (ch *ConnectionHandler) CreateConnection(c *gin.Context) {
 		req.Status = "active"
 	}
 
-	validatedDB, err := VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
+	validatedDB, err := utils.VerifyConnection(req.DBType, req.Hostname, req.Port, req.Username, req.Password, req.DBName)
 	if err != nil {
 		writeErrorResponse(c, 400, fmt.Sprintf("Failed to establish database connection: %v", err))
 		return

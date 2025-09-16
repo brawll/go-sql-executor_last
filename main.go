@@ -82,6 +82,7 @@ func main() {
 	// Setup handlers with database
 	templatesHandler := handler.NewTemplatesHandler(db)
 	connectionHandler := handler.NewConnectionHandler(db)
+	noCodeGenerator := handler.NewNoCodeGenerator(db)
 	handler.InitCategoryHandler(db)
 
 	// Setup Gin router
@@ -109,6 +110,11 @@ func main() {
 	r.POST("/api/connections", connectionHandler.CreateConnection)
 	r.GET("/api/connections", connectionHandler.GetConnections)
 	r.DELETE("/api/connections/:connection_id", connectionHandler.DeleteConnection)
+
+	// NoCode Generator endpoint
+	r.GET("/api/tables/:connection_id", noCodeGenerator.GetTables)
+	r.GET("/api/columns/public/:table_name", noCodeGenerator.GetColumnsPublic)
+	r.POST("/api/generate-report", noCodeGenerator.GenerateReport)
 
 	// Category Management Routes
 	r.GET("/api/categories", handler.GetCategoryReports)
@@ -143,11 +149,14 @@ func main() {
 
 	log.Println("Combined services starting on :8000")
 	log.Println("Available endpoints:")
-	log.Println("  POST /api/v1/generate-report - Generate reports")
+	log.Println("  POST /api/v1/generate-report - Generate reports (raw SQL)")
+	log.Println("  POST /api/generate-report - Generate reports (nocode table selector)")
 	log.Println("  GET  /health - Health check")
 	log.Println("  POST /api/connections - Create database connection")
 	log.Println("  GET  /api/connections - Get all connections")
 	log.Println("  DELETE /api/connections/:connection_id - Delete connection")
+	log.Println("  GET  /api/tables/:connection_id - Get tables for connection")
+	log.Println("  GET  /api/columns/public/:table_name - Get columns for table in public schema")
 	log.Println("  GET /api/categories - Get all category reports")
 	log.Println("  GET /api/categories/:category_name - Get reports by category")
 	log.Println("  POST /api/categories - Create new category")
