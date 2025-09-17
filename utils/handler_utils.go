@@ -146,11 +146,6 @@ func GetColumnsType(db *sql.DB, dbType, schemaName, tableName string, selectedFi
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	// Debug logging
-	fmt.Printf("DEBUG: Query: %s\n", query)
-	fmt.Printf("DEBUG: Args: %v\n", args)
-	fmt.Printf("DEBUG: Num args: %d\n", len(args))
-
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query columns: %v", err)

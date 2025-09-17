@@ -392,8 +392,8 @@ func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
 	}
 
 	// Build count query (no parameters since no filters)
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS count_query", baseQuery)
-
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s)", baseQuery)
+	//fmt.Printf(countQuery)
 	// Get total records for pagination info
 	var totalRecords int
 	err = conn.QueryRow(countQuery).Scan(&totalRecords)
@@ -423,17 +423,24 @@ func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	columns, err := rows.Columns()
+	// Get columns in SQL result order, then potentially reorder for display
+	originalColumns, err := rows.Columns()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error getting columns: %v", err)})
 		return
 	}
 
-	// Scan results
+	// Columns for response (may be reordered)
+	responseColumns := originalColumns
+	if req.SortBy != "" {
+		responseColumns = reorderColumnsForSortField(originalColumns, req.SortBy)
+	}
+
+	// Scan results using original SQL column order
 	results := []map[string]interface{}{}
 	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		scanArgs := make([]interface{}, len(values))
+		values := make([]interface{}, len(originalColumns))
+		scanArgs := make([]interface{}, len(originalColumns))
 		for i := range values {
 			scanArgs[i] = &values[i]
 		}
@@ -444,12 +451,24 @@ func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
 			return
 		}
 
+		// Create rowMap using RESPONSE column order (not SQL order)
 		rowMap := make(map[string]interface{})
-		for i, col := range columns {
-			if b, ok := values[i].([]byte); ok {
-				rowMap[col] = string(b)
-			} else {
-				rowMap[col] = values[i]
+		for _, responseCol := range responseColumns {
+			// Find the original SQL index for this response column
+			originalIdx := -1
+			for origIdx, origCol := range originalColumns {
+				if origCol == responseCol {
+					originalIdx = origIdx
+					break
+				}
+			}
+
+			if originalIdx >= 0 {
+				if b, ok := values[originalIdx].([]byte); ok {
+					rowMap[responseCol] = string(b)
+				} else {
+					rowMap[responseCol] = values[originalIdx]
+				}
 			}
 		}
 		results = append(results, rowMap)
@@ -501,7 +520,7 @@ func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
 		"total_pages":   totalPages,
 		"current_page":  page,
 		"page_size":     pageSize,
-		"columns":       columns,
+		"columns":       responseColumns,
 		"column_types":  columnTypeMap(columnTypes),
 		"totals":        totals,
 		"connection_info": gin.H{
@@ -579,5 +598,41 @@ func columnTypeMap(columnTypes map[string]utils.ColumnType) map[string]string {
 	for name, colType := range columnTypes {
 		result[name] = colType.Type
 	}
+	return result
+}
+
+// reorderColumnsForSortField moves the sort field to the front of columns array for better UX
+func reorderColumnsForSortField(columns []string, sortField string) []string {
+	if sortField == "" {
+		return columns
+	}
+
+	// Check if sort field is in the columns
+	sortFieldIndex := -1
+	for i, col := range columns {
+		if col == sortField {
+			sortFieldIndex = i
+			break
+		}
+	}
+
+	// If sort field not found or already first, return original order
+	if sortFieldIndex <= 0 {
+		return columns
+	}
+
+	// Reorder: move sort field to front
+	result := make([]string, len(columns))
+	result[0] = sortField
+
+	// Add remaining columns (skip the sort field)
+	j := 1
+	for _, col := range columns {
+		if col != sortField {
+			result[j] = col
+			j++
+		}
+	}
+
 	return result
 }
