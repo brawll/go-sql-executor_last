@@ -104,7 +104,7 @@ func main() {
 
 	// Setup routes
 	r.GET("/health", reportService.HealthCheckHandler)
-	r.POST("/api/v1/generate-report", reportService.GenerateReportHandler)
+	r.POST("/api/generate-pdf", reportService.GenerateReportHandler)
 
 	// Connection endpoints
 	r.POST("/api/connections", connectionHandler.CreateConnection)

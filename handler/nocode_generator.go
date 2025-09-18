@@ -2,9 +2,7 @@ package handler
 
 import (
 	"database/sql"
-	"encoding/base64"
 	"fmt"
-	"go-sql-executor/models"
 	"go-sql-executor/utils"
 	"math"
 	"net/http"
@@ -65,34 +63,6 @@ type NoCodeGenerator struct {
 
 func NewNoCodeGenerator(db *sql.DB) *NoCodeGenerator {
 	return &NoCodeGenerator{Db: db}
-}
-
-// GetUserDBConnection retrieves user database connection details by ID
-func (ncg *NoCodeGenerator) GetUserDBConnection(connectionID string) (*models.UserDBConnection, error) {
-	query := `
-		SELECT id, connection_name, username, password, hostname, port, db_name, db_type, status, created_at
-		FROM user_connection.user_db_connections
-		WHERE id = $1
-	`
-
-	var conn models.UserDBConnection
-	var encodedPassword string
-
-	row := ncg.Db.QueryRow(query, connectionID)
-	err := row.Scan(&conn.ID, &conn.ConnectionName, &conn.Username, &encodedPassword,
-		&conn.Hostname, &conn.Port, &conn.DBName, &conn.DBType, &conn.Status, &conn.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch connection: %v", err)
-	}
-
-	// Decode password from base64
-	passwordBytes, err := base64.StdEncoding.DecodeString(encodedPassword)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode password: %v", err)
-	}
-	conn.Password = string(passwordBytes)
-
-	return &conn, nil
 }
 
 // getTablesForDBType retrieves tables based on database type
@@ -175,7 +145,7 @@ func (ncg *NoCodeGenerator) GetTables(c *gin.Context) {
 	connectionID := c.Param("connection_id")
 
 	// Get user database connection details
-	userDBConn, err := ncg.GetUserDBConnection(connectionID)
+	userDBConn, err := utils.GetUserDBConnection(connectionID, ncg.Db)
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to get connection details: %v", err)})
 		return
@@ -220,7 +190,7 @@ func (ncg *NoCodeGenerator) GetTables(c *gin.Context) {
 	c.JSON(200, response)
 }
 
-// getColumnsForDBType retrieves columns for a specific table based on database type
+// getColumnsForDBType retrieves columns and their metadata of a specific table based on database type
 func getColumnsForDBType(conn *sql.DB, dbType string, tableName string) ([]ColumnInfo, error) {
 	var query string
 
@@ -305,7 +275,7 @@ func (ncg *NoCodeGenerator) GetColumnsPublic(c *gin.Context) {
 	dbConnID := c.Query("database")
 
 	conn := ncg.Db
-	userDBConn, err := ncg.GetUserDBConnection(dbConnID)
+	userDBConn, err := utils.GetUserDBConnection(dbConnID, ncg.Db)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Database connection failed: %v", err)})
 	}
@@ -362,7 +332,7 @@ func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
 		}
 	}
 
-	userConnection, err := ncg.GetUserDBConnection(req.ConnectionID)
+	userConnection, err := utils.GetUserDBConnection(req.ConnectionID, ncg.Db)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get connection details"})
 		return

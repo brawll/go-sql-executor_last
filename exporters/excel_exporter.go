@@ -2,6 +2,7 @@ package exporters
 
 import (
 	"fmt"
+	"strings"
 
 	"go-sql-executor/models"
 
@@ -39,7 +40,21 @@ func ExportToExcel(result models.QueryResult, filename string) error {
 			cell := fmt.Sprintf("%s%d", columnName(colIdx), rowIdx+2)
 
 			if val := row[col]; val != nil {
-				f.SetCellValue(sheetName, cell, fmt.Sprintf("%v", val))
+				// Convert to string explicitly
+				var strVal string
+				if str, ok := val.(string); ok {
+					strVal = str
+				} else {
+					strVal = fmt.Sprintf("%v", val)
+				}
+
+				// Force Excel to treat timestamp strings as text to prevent auto-formatting
+				if isDateTimeString(strVal) {
+					// Set as string explicitly to preserve timestamp format
+					f.SetCellStr(sheetName, cell, strVal)
+				} else {
+					f.SetCellValue(sheetName, cell, strVal)
+				}
 			}
 		}
 	}
@@ -55,4 +70,45 @@ func columnName(index int) string {
 		index = index/26 - 1
 	}
 	return result
+}
+
+// isDateTimeString checks if a string looks like a timestamp that Excel might auto-format
+func isDateTimeString(s string) bool {
+	// Date + Time patterns (what we currently generate)
+	if strings.Contains(s, ":") && (strings.Contains(s, "-") || strings.Contains(s, "/")) {
+		// Examples: "2025-09-05 17:40:33", "09/05/2025 17:40:33.733761"
+		return true
+	}
+
+	// Date-only patterns
+	dateOnlyPatterns := []string{
+		"????-??-??", // YYYY-MM-DD
+		"????/??/??", // YYYY/MM/DD
+		"??/??/????", // MM/DD/YYYY
+		"??-??-????", // MM-DD-YYYY
+		"??-??-??",   // DD-MM-YY or MM-DD-YY
+	}
+	for _, pattern := range dateOnlyPatterns {
+		if len(s) == len(pattern) && (strings.Contains(s, "-") || strings.Contains(s, "/")) {
+			return true
+		}
+	}
+
+	// Time-only patterns
+	timeOnlyPatterns := []string{
+		"??:??:??",          // HH:MM:SS (8 chars)
+		"??:??:??\\.??????", // HH:MM:SS.microseconds
+		"?:??:??",           // H:MM:SS (7 chars)
+	}
+	// For time-only patterns, just check length and presence of colons
+	for _, _ = range timeOnlyPatterns {
+		if strings.Contains(s, ":") && !strings.Contains(s, "-") && !strings.Contains(s, "/") && len(s) >= 7 && len(s) <= 15 {
+			// Time-only (no date separators), check if length matches expected patterns
+			if len(s) >= 7 && len(s) <= 15 { // Reasonable length for time
+				return true
+			}
+		}
+	}
+
+	return false
 }

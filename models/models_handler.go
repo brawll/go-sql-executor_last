@@ -16,8 +16,28 @@ import (
 
 // ReportRequest represents the incoming request structure
 type ReportRequest struct {
-	Query string `json:"query"`
-	//	Database   DatabaseConfig    `json:"database"`
+	// Connection and schema information
+	ConnectionID   string   `json:"connection_id"`
+	SchemaName     string   `json:"schema_name"`
+	TableName      string   `json:"table_name"`
+	SelectedFields []string `json:"selected_fields"`
+
+	// Filtering and aggregation
+	Filters      interface{} `json:"filters"`
+	Aggregations interface{} `json:"aggregations"`
+
+	// Report metadata
+	ReportTitle    string      `json:"report_title"`
+	ReportFilename string      `json:"report_filename"`
+	CategoryName   string      `json:"category_name"`
+	TotalColumns   interface{} `json:"total_columns"`
+
+	// Template configuration
+	TemplateID     *string                `json:"template_id,omitempty"`
+	TemplateConfig map[string]interface{} `json:"template_config,omitempty"`
+
+	// Legacy support
+	Query string `json:"query,omitempty"`
 	// Parameters map[string]string `json:"parameters"` // Optional query parameters
 }
 

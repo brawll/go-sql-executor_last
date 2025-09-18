@@ -3,14 +3,17 @@ package utils
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"go-sql-executor/models"
 )
 
 // getConnectionInfo builds database connection string and driver for given type
-func getConnectionInfo(dbType, hostname string, port int, username, password, dbName string) (string, string) {
+func GetConnectionInfo(dbType, hostname string, port int, username, password, dbName string) (string, string) {
 	switch dbType {
 	case "PostgreSQL":
 		connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
@@ -30,7 +33,7 @@ func getConnectionInfo(dbType, hostname string, port int, username, password, db
 
 // VerifyConnection tests database connectivity and returns the open connection
 func VerifyConnection(dbType, hostname string, port int, username, password, dbName string) (*sql.DB, error) {
-	connStr, driverName := getConnectionInfo(dbType, hostname, port, username, password, dbName)
+	connStr, driverName := GetConnectionInfo(dbType, hostname, port, username, password, dbName)
 	if connStr == "" {
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
@@ -53,6 +56,34 @@ func VerifyConnection(dbType, hostname string, port int, username, password, dbN
 	}
 
 	return testDB, nil
+}
+
+// GetUserDBConnection retrieves user database connection details by ID
+func GetUserDBConnection(connectionID string, db *sql.DB) (*models.UserDBConnection, error) {
+	query := `
+		SELECT id, connection_name, username, password, hostname, port, db_name, db_type, status, created_at
+		FROM user_connection.user_db_connections
+		WHERE id = $1
+	`
+
+	var conn models.UserDBConnection
+	var encodedPassword string
+
+	row := db.QueryRow(query, connectionID)
+	err := row.Scan(&conn.ID, &conn.ConnectionName, &conn.Username, &encodedPassword,
+		&conn.Hostname, &conn.Port, &conn.DBName, &conn.DBType, &conn.Status, &conn.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch connection: %v", err)
+	}
+
+	// Decode password from base64
+	passwordBytes, err := base64.StdEncoding.DecodeString(encodedPassword)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode password: %v", err)
+	}
+	conn.Password = string(passwordBytes)
+
+	return &conn, nil
 }
 
 // ColumnType represents column information for selected fields

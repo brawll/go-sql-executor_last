@@ -313,7 +313,7 @@ const htmlTemplate = `
                         {{range $rowIndex, $row := $result.Data.Rows}}
                         <tr>
                             {{range $colName := $result.Data.Columns}}
-                            <td>{{if index $row $colName}}{{index $row $colName}}{{else}}NULL{{end}}</td>
+                            <td>{{if notnil (index $row $colName)}}{{index $row $colName}}{{else}}NULL{{end}}</td>
                             {{end}}
                         </tr>
                         {{end}}
@@ -343,7 +343,8 @@ func GenerateHTML(config models.HTMLConfig, results []models.QueryResult) ([]byt
 
 	// Parse and execute template
 	tmpl, err := template.New("report").Funcs(template.FuncMap{
-		"add": func(a, b int) int { return a + b },
+		"add":    func(a, b int) int { return a + b },
+		"notnil": func(v interface{}) bool { return v != nil },
 	}).Parse(htmlTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML template: %w", err)

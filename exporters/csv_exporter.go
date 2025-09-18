@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"strings"
 
 	"go-sql-executor/models"
 )
@@ -69,7 +70,22 @@ func (ce *CSVExporter) ExportToCSV(results []models.QueryResult, filename string
 			csvRow := make([]string, len(result.Data.Columns))
 			for i, col := range result.Data.Columns {
 				if val := row[col]; val != nil {
-					csvRow[i] = fmt.Sprintf("%v", val)
+					// Convert to string explicitly and treat all values as text to prevent Excel date formatting
+					var strVal string
+					if str, ok := val.(string); ok {
+						strVal = str
+					} else {
+						strVal = fmt.Sprintf("%v", val)
+					}
+
+					// Preserve timestamp strings by ensuring they're treated as text
+					// Excel can auto-format timestamps, so we make sure they stay as strings
+					if ce.isDateTimeString(strVal) {
+						// This looks like a timestamp/date/time string that Excel might auto-format
+						csvRow[i] = `"` + strVal + `"`
+					} else {
+						csvRow[i] = strVal
+					}
 				} else {
 					csvRow[i] = ""
 				}
@@ -99,4 +115,46 @@ func (ce *CSVExporter) writeQueryHeader(writer *csv.Writer, result models.QueryR
 
 	// Empty line for separation
 	return writer.Write([]string{})
+}
+
+// isDateTimeString checks if a string looks like a timestamp that Excel might auto-format
+func (ce *CSVExporter) isDateTimeString(s string) bool {
+
+	// Date + Time patterns (what we currently generate)
+	if strings.Contains(s, ":") && (strings.Contains(s, "-") || strings.Contains(s, "/")) {
+		// Examples: "2025-09-05 17:40:33", "09/05/2025 17:40:33.733761"
+		return true
+	}
+
+	// Date-only patterns
+	dateOnlyPatterns := []string{
+		"????-??-??", // YYYY-MM-DD
+		"????/??/??", // YYYY/MM/DD
+		"??/??/????", // MM/DD/YYYY
+		"??-??-????", // MM-DD-YYYY
+		"??-??-??",   // DD-MM-YY or MM-DD-YY
+	}
+	for _, pattern := range dateOnlyPatterns {
+		if len(s) == len(pattern) && (strings.Contains(s, "-") || strings.Contains(s, "/")) {
+			return true
+		}
+	}
+
+	// Time-only patterns
+	timeOnlyPatterns := []string{
+		"??:??:??",          // HH:MM:SS (8 chars)
+		"??:??:??\\.??????", // HH:MM:SS.microseconds
+		"?:??:??",           // H:MM:SS (7 chars)
+	}
+	// For time-only patterns, just check length and presence of colons
+	for _, _ = range timeOnlyPatterns {
+		if strings.Contains(s, ":") && !strings.Contains(s, "-") && !strings.Contains(s, "/") && len(s) >= 7 && len(s) <= 15 {
+			// Time-only (no date separators), check if length matches expected patterns
+			if len(s) >= 7 && len(s) <= 15 { // Reasonable length for time
+				return true
+			}
+		}
+	}
+
+	return false
 }
