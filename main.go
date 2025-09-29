@@ -113,8 +113,9 @@ func main() {
 
 	// NoCode Generator endpoint
 	r.GET("/api/tables/:connection_id", noCodeGenerator.GetTables)
-	r.GET("/api/columns/public/:table_name", noCodeGenerator.GetColumnsPublic)
-	r.POST("/api/generate-report", noCodeGenerator.GenerateReport)
+	r.GET("/api/columns/:connection_id/:schema_name/:table_name", noCodeGenerator.GetColumnsPublic)
+	//r.GET("/api/columns/:connection_id/:schema_name/:table_name", noCodeGenerator.GetAllColumns)
+	r.POST("/api/generate-report", noCodeGenerator.ReportPreview)
 
 	// Category Management Routes
 	r.GET("/api/categories", handler.GetCategoryReports)
@@ -134,6 +135,9 @@ func main() {
 	r.GET("/api/templates/:id", templatesHandler.GetTemplate)
 	r.PUT("/api/templates/:id", templatesHandler.UpdateTemplate)
 	r.DELETE("/api/templates/:id", templatesHandler.DeleteTemplate)
+
+	// Static reports routes
+	//r.GET("/static-reports/direct-download", staticReports.directDownloadHandler)
 
 	// Serve OpenAPI spec
 	r.GET("/openapi.yaml", func(c *gin.Context) {

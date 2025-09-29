@@ -5,15 +5,6 @@ import (
 	"time"
 )
 
-// type DatabaseConfig struct {
-// 	Host     string `json:"host"`
-// 	Port     int    `json:"port"`
-// 	Database string `json:"database"`
-// 	Username string `json:"username"`
-// 	Password string `json:"password"`
-// 	Driver   string `json:"driver"` // "postgres", "mysql", etc.
-// }
-
 // ReportRequest represents the incoming request structure
 type ReportRequest struct {
 	// Connection and schema information
@@ -23,14 +14,14 @@ type ReportRequest struct {
 	SelectedFields []string `json:"selected_fields"`
 
 	// Filtering and aggregation
-	Filters      interface{} `json:"filters"`
-	Aggregations interface{} `json:"aggregations"`
+	Filters      interface{} `json:"filters,omitempty"`
+	Aggregations interface{} `json:"aggregations,omitempty"`
 
 	// Report metadata
 	ReportTitle    string      `json:"report_title"`
 	ReportFilename string      `json:"report_filename"`
 	CategoryName   string      `json:"category_name"`
-	TotalColumns   interface{} `json:"total_columns"`
+	TotalColumns   interface{} `json:"total_columns,omitempty"`
 
 	// Template configuration
 	TemplateID     *string                `json:"template_id,omitempty"`

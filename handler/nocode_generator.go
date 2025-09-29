@@ -36,6 +36,9 @@ type ColumnInfo struct {
 
 type ColumnResponse struct {
 	Success        bool         `json:"success"`
+	ConnectionName string       `json:"connection_name"`
+	DBType         string       `json:"db_type"`
+	Schema         string       `json:"schema"`
 	Table          string       `json:"table"`
 	Columns        []ColumnInfo `json:"columns"`
 	HasDateColumns bool         `json:"has_date_columns"`
@@ -51,10 +54,11 @@ type ReportRequest struct {
 	ConnectionID   string   `json:"connection_id"`
 	SchemaName     string   `json:"schema_name"`
 	TableName      string   `json:"table_name"`
-	SelectedFields []string `json:"selected_fields,omitempty"`
+	SelectedFields []string `json:"selected_fields"`
 	Filters        []Filter `json:"filters,omitempty"`
 	SortBy         string   `json:"sort_by,omitempty"`
 	SortOrder      string   `json:"sort_order,omitempty"`
+	TemplateID     string   `json:"template_id,omitempty"`
 }
 
 type NoCodeGenerator struct {
@@ -191,7 +195,7 @@ func (ncg *NoCodeGenerator) GetTables(c *gin.Context) {
 }
 
 // getColumnsForDBType retrieves columns and their metadata of a specific table based on database type
-func getColumnsForDBType(conn *sql.DB, dbType string, tableName string) ([]ColumnInfo, error) {
+func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]ColumnInfo, error) {
 	var query string
 
 	switch dbType {
@@ -203,8 +207,8 @@ func getColumnsForDBType(conn *sql.DB, dbType string, tableName string) ([]Colum
 				is_nullable,
 				column_default
 			FROM information_schema.columns
-			WHERE table_schema = 'public'
-			AND table_name = $1
+			WHERE table_schema = $1
+			AND table_name = $2
 			ORDER BY ordinal_position;
 		`
 	case "MySQL":
@@ -215,7 +219,7 @@ func getColumnsForDBType(conn *sql.DB, dbType string, tableName string) ([]Colum
 				is_nullable,
 				column_default
 			FROM information_schema.columns
-			WHERE table_schema = 'public'
+			WHERE table_schema = ?
 			AND table_name = ?
 			ORDER BY ordinal_position;
 		`
@@ -235,7 +239,7 @@ func getColumnsForDBType(conn *sql.DB, dbType string, tableName string) ([]Colum
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	rows, err := conn.Query(query, tableName)
+	rows, err := conn.Query(query, schema, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query columns: %v", err)
 	}
@@ -269,21 +273,44 @@ func getColumnsForDBType(conn *sql.DB, dbType string, tableName string) ([]Colum
 	return columns, nil
 }
 
+// func (ncg *NoCodeGenerator) GetAllColumns(c *gin.Context) {
+// 	dbConnID := c.Query("connection_id")
+// 	schema := c.Query("schema_name")
+// 	tableName := c.Query("table_name")
+
+// 	conn := ncg.Db
+// 	userDBConn, err := utils.GetUserDBConnection(dbConnID, ncg.Db)
+// 	if err != nil {
+// 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Databse connection failed: %v", err)})
+// 	}
+
+// 	dbType := userDBConn.DBType
+
+// }
+
 // GetColumnsPublic - Get all columns for a specific table in public schema
 func (ncg *NoCodeGenerator) GetColumnsPublic(c *gin.Context) {
+	dbConnID := c.Param("connection_id")
+	schema := c.Param("schema_name")
 	tableName := c.Param("table_name")
-	dbConnID := c.Query("database")
 
-	conn := ncg.Db
 	userDBConn, err := utils.GetUserDBConnection(dbConnID, ncg.Db)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Database connection failed: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to verify Database connection id: %v", err)})
+		return
 	}
 
-	dbType := userDBConn.DBType
+	connStr, driverName := utils.GetConnectionInfo(userDBConn.DBType, userDBConn.Hostname, userDBConn.Port,
+		userDBConn.Username, userDBConn.Password, userDBConn.DBName)
+
+	db, err := sql.Open(driverName, connStr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to open db connection: %v", err)})
+		return
+	}
 
 	// Query columns
-	columns, err := getColumnsForDBType(conn, dbType, tableName)
+	columns, err := getColumnsForDBType(db, userDBConn.DBType, schema, tableName)
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Error fetching columns: %v", err)})
 		return
@@ -300,6 +327,9 @@ func (ncg *NoCodeGenerator) GetColumnsPublic(c *gin.Context) {
 
 	response := ColumnResponse{
 		Success:        true,
+		ConnectionName: userDBConn.ConnectionName,
+		DBType:         userDBConn.DBType,
+		Schema:         schema,
 		Table:          tableName,
 		Columns:        columns,
 		HasDateColumns: hasDateColumns,
@@ -307,7 +337,7 @@ func (ncg *NoCodeGenerator) GetColumnsPublic(c *gin.Context) {
 	c.JSON(200, response)
 }
 
-func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
+func (ncg *NoCodeGenerator) ReportPreview(c *gin.Context) {
 	var req ReportRequest
 	var page, pageSize int
 	var err error
@@ -362,7 +392,7 @@ func (ncg *NoCodeGenerator) GenerateReport(c *gin.Context) {
 	}
 
 	// Build count query (no parameters since no filters)
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s)", baseQuery)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS record_count", baseQuery)
 	//fmt.Printf(countQuery)
 	// Get total records for pagination info
 	var totalRecords int

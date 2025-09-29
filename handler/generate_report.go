@@ -20,6 +20,7 @@ import (
 
 // TemplateConfig represents the flattened template configuration for PDF generation
 type TemplateConfig struct {
+	Name                string  `json:"name"`
 	TableHeadBgColor    string  `json:"table_head_bg_color"`
 	TableHeadTextColor  string  `json:"table_head_text_color"`
 	Logo                *string `json:"logo"`
@@ -196,7 +197,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		htmlConfig.HeaderColor = "#2c3e50"
 		htmlConfig.Theme = "light"
 
-		htmlBytes, err := exporters.GenerateHTML(htmlConfig, results)
+		htmlBytes, err := exporters.GeneratePaginatedHTML(htmlConfig, results)
 		if err != nil {
 			log.Printf("Failed to generate HTML: %v", err)
 			errors = append(errors, fmt.Sprintf("HTML generation failed: %v", err))
@@ -316,6 +317,34 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		response.Message = fmt.Sprintf("Query executed but with errors: %s", results[0].Error)
 	} else {
 		response.Message = "No query results available"
+	}
+
+	// var report_title, report_filename string
+	// if req.ReportFilename == "" {
+	// 	report_filename = "report_" + time.Now().Format("2006-01-02_15-04-05")
+	// } else {
+	// 	report_filename = req.ReportFilename
+	// }
+
+	// if req.ReportTitle == "" {
+	// 	report_title = req.CategoryName + "_" + templateConfig.Name + "_" + req.TableName
+	// }
+
+	path := "reports"
+	_, err3 := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err3) {
+			fmt.Printf("path don't exist: %v\n", path)
+			if err := os.Mkdir(path, 0755); err != nil {
+				log.Fatal("err")
+			} else {
+				fmt.Printf("created directory %s", path)
+			}
+		} else {
+			fmt.Printf("Error checking path %v\n", err3)
+		}
+		return
+
 	}
 
 	// Return response
