@@ -180,5 +180,4 @@ func main() {
 	if err := r.Run(":8000"); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
-
 }

@@ -395,14 +395,14 @@ func (pg *PDFGenerator) addWideTable(data *models.QueryData, startY, pageWidth f
 	return currentY
 }
 
-// drawWideTableRows draws all table rows for wide layout - NO TRUNCATION VERSION.
+// drawWideTableRows draws all table rows for wide layout with proper text wrapping.
 func (pg *PDFGenerator) drawWideTableRows(data *models.QueryData, colWidths []float64, startY float64) float64 {
 	if len(data.Rows) == 0 {
 		return startY
 	}
 
-	rowHeight := pg.config.TableRowHeight
 	currentY := startY
+	lineHeight := float64(pg.config.FontSize + 2)
 
 	// Set row style
 	pg.pdf.SetTextColor(0, 0, 0)
@@ -416,37 +416,60 @@ func (pg *PDFGenerator) drawWideTableRows(data *models.QueryData, colWidths []fl
 	}
 
 	for rowIdx, row := range data.Rows {
-		// Alternate row colors
-		if rowIdx%2 == 1 {
-			pg.pdf.SetFillColor(248, 249, 250)
-			pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, currentY, totalWidth, rowHeight, "F")
-		}
+		rowStartY := currentY
+		rowHeightUsed := pg.config.TableRowHeight
 
-		// Row border
-		pg.pdf.Line(pg.config.MarginX, currentY+rowHeight, pg.config.MarginX+totalWidth, currentY+rowHeight)
-
-		// Cell content
-		currentX := pg.config.MarginX
+		// Calculate required row height based on text wrapping
 		for i, col := range data.Columns {
-			if i > 0 {
-				pg.pdf.Line(currentX, currentY, currentX, currentY+rowHeight)
-			}
-
-			// Cell value
 			cellValue := "NULL"
 			if val := row[col]; val != nil {
 				cellValue = fmt.Sprintf("%v", val)
 			}
 
-			// NO TRUNCATION - Display full content
-			// Just add the text with padding, no length checking
-			pg.pdf.SetXY(currentX+5, currentY+6) // Increased left padding
-			pg.pdf.Cell(nil, cellValue)          // Full content, no truncation
+			availWidth := colWidths[i] - 10
+			charWidth := 6.0
+			if availWidth > charWidth {
+				charsPerLine := availWidth / charWidth
+				numLines := (len(cellValue) / int(charsPerLine)) + 1
+				cellHeight := float64(numLines) * lineHeight
+				if cellHeight > rowHeightUsed {
+					rowHeightUsed = cellHeight
+				}
+			}
+		}
 
+		// Draw row background
+		if rowIdx%2 == 1 {
+			pg.pdf.SetFillColor(248, 249, 250)
+			pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, rowStartY, totalWidth, rowHeightUsed, "F")
+		}
+
+		// Draw row borders
+		pg.pdf.Line(pg.config.MarginX, rowStartY+rowHeightUsed, pg.config.MarginX+totalWidth, rowStartY+rowHeightUsed)
+
+		// Draw vertical borders
+		currentX := pg.config.MarginX
+		for i := 0; i < len(data.Columns); i++ {
+			if i > 0 {
+				pg.pdf.Line(currentX, rowStartY, currentX, rowStartY+rowHeightUsed)
+			}
 			currentX += colWidths[i]
 		}
 
-		currentY += rowHeight
+		// Draw cell content with MultiCell for proper wrapping
+		currentX = pg.config.MarginX
+		for i, col := range data.Columns {
+			cellValue := "NULL"
+			if val := row[col]; val != nil {
+				cellValue = fmt.Sprintf("%v", val)
+			}
+
+			pg.pdf.SetXY(currentX+5, rowStartY+6)
+			pg.pdf.MultiCell(&gopdf.Rect{W: colWidths[i] - 10, H: rowHeightUsed}, cellValue)
+			currentX += colWidths[i]
+		}
+
+		currentY += rowHeightUsed
 	}
 
 	// Final borders
@@ -456,9 +479,25 @@ func (pg *PDFGenerator) drawWideTableRows(data *models.QueryData, colWidths []fl
 	return currentY
 }
 
-// drawWideTableHeaders draws table headers for wide layout - NO TRUNCATION VERSION.
+// drawWideTableHeaders draws table headers for wide layout with proper text wrapping.
 func (pg *PDFGenerator) drawWideTableHeaders(columns []string, colWidths []float64, startY float64) float64 {
-	headerHeight := pg.config.TableRowHeight + 8 // Increased height for better readability
+	headerBaseHeight := pg.config.TableRowHeight + 8 // Base height for better readability
+	lineHeight := float64(pg.config.FontSize + 2)    // Same as font size + padding
+
+	// Calculate required header height based on text wrapping
+	headerHeightUsed := headerBaseHeight
+	for i, col := range columns {
+		availWidth := colWidths[i] - 10
+		charWidth := 6.0
+		if availWidth > charWidth {
+			charsPerLine := availWidth / charWidth
+			numLines := (len(col) / int(charsPerLine)) + 1
+			headerHeight := float64(numLines)*lineHeight + 8 // Include padding
+			if headerHeight > headerHeightUsed {
+				headerHeightUsed = headerHeight
+			}
+		}
+	}
 
 	// Header background
 	pg.pdf.SetFillColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
@@ -470,27 +509,31 @@ func (pg *PDFGenerator) drawWideTableHeaders(columns []string, colWidths []float
 		totalWidth += w
 	}
 
-	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, startY, totalWidth, headerHeight, "F")
+	pg.pdf.RectFromUpperLeftWithStyle(pg.config.MarginX, startY, totalWidth, headerHeightUsed, "F")
 
 	// Header borders
 	pg.pdf.SetStrokeColor(100, 100, 100)
 	pg.pdf.SetLineWidth(0.5)
 
 	currentX := pg.config.MarginX
-	for i, col := range columns {
+	for i := 0; i < len(columns); i++ {
 		if i > 0 {
-			pg.pdf.Line(currentX, startY, currentX, startY+headerHeight)
+			pg.pdf.Line(currentX, startY, currentX, startY+headerHeightUsed)
 		}
+		currentX += colWidths[i]
+	}
 
-		// Header text - NO TRUNCATION
+	// Draw header text with MultiCell for proper wrapping
+	currentX = pg.config.MarginX
+	for i, col := range columns {
 		pg.pdf.SetXY(currentX+5, startY+10) // Increased padding
-		pg.pdf.Cell(nil, col)               // Full column name, no truncation
+		pg.pdf.MultiCell(&gopdf.Rect{W: colWidths[i] - 10, H: headerHeightUsed - 10}, col)
 		currentX += colWidths[i]
 	}
 
 	// Horizontal borders
 	pg.pdf.Line(pg.config.MarginX, startY, pg.config.MarginX+totalWidth, startY)
-	pg.pdf.Line(pg.config.MarginX, startY+headerHeight, pg.config.MarginX+totalWidth, startY+headerHeight)
+	pg.pdf.Line(pg.config.MarginX, startY+headerHeightUsed, pg.config.MarginX+totalWidth, startY+headerHeightUsed)
 
-	return startY + headerHeight
+	return startY + headerHeightUsed
 }
