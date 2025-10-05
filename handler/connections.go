@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"go-sql-executor/models"
@@ -84,6 +85,39 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(db *sql.DB, dbType string, d
 		columnsArgs = func(tableName string) []interface{} {
 			return []interface{}{tableName}
 		}
+	case "Oracle":
+		// Limit to current schema (user) using USER_* views for performance and simplicity
+		tablesQuery = `
+			SELECT table_name, 'BASE TABLE' AS table_type FROM user_tables
+			UNION ALL
+			SELECT view_name AS table_name, 'VIEW' AS table_type FROM user_views
+			ORDER BY 1`
+		tablesArgs = []interface{}{}
+
+		columnsQuery = `
+			SELECT
+				c.column_name,
+				c.data_type,
+				c.nullable,
+				c.data_default,
+				c.char_col_decl_length,
+				CASE
+					WHEN EXISTS (
+						SELECT 1
+						FROM user_constraints uc
+						JOIN user_cons_columns ucc ON uc.constraint_name = ucc.constraint_name
+						WHERE uc.constraint_type = 'P'
+						  AND ucc.table_name = c.table_name
+						  AND ucc.column_name = c.column_name
+					) THEN 1 ELSE 0
+				END AS is_primary_key
+			FROM user_tab_columns c
+			WHERE c.table_name = :1
+			ORDER BY c.column_id`
+
+		columnsArgs = func(tableName string) []interface{} {
+			return []interface{}{strings.ToUpper(tableName)}
+		}
 	}
 
 	// Get tables
@@ -135,6 +169,13 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(db *sql.DB, dbType string, d
 
 			switch dbType {
 			case "MSSQL":
+				var isPK int
+				if err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &isPK); err != nil {
+					colRows.Close()
+					return nil, err
+				}
+				col.IsPrimaryKey = isPK == 1
+			case "Oracle":
 				var isPK int
 				if err := colRows.Scan(&col.Name, &col.Type, &col.Nullable, &defaultVal, &maxLength, &isPK); err != nil {
 					colRows.Close()

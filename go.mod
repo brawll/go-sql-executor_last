@@ -10,6 +10,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/signintech/gopdf v0.33.0
+	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/xuri/excelize/v2 v2.9.1
 )

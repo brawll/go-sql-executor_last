@@ -116,6 +116,18 @@ func getTablesForDBType(conn *sql.DB, dbType string) ([]TableInfo, error) {
 			AND table_type = 'BASE TABLE'
 			ORDER BY table_schema, table_name;
 		`
+	case "Oracle":
+		// List tables across non-system schemas
+		query = `
+			SELECT owner AS table_schema, table_name
+			FROM all_tables
+			WHERE owner NOT IN (
+				'SYS','SYSTEM','XDB','MDSYS','CTXSYS','ORDSYS','OUTLN',
+				'OLAPSYS','DBSNMP','APPQOSSYS','ORDDATA','AUDSYS','OJVMSYS',
+				'GSMADMIN_INTERNAL'
+			)
+			ORDER BY owner, table_name
+		`
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
@@ -130,7 +142,6 @@ func getTablesForDBType(conn *sql.DB, dbType string) ([]TableInfo, error) {
 	for rows.Next() {
 		var table TableInfo
 		err := rows.Scan(&table.Schema, &table.Table)
-		//log.Print(*&table.Schema, *&table.Table)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan table row: %v", err)
 		}
@@ -197,6 +208,7 @@ func (ncg *NoCodeGenerator) GetTables(c *gin.Context) {
 // getColumnsForDBType retrieves columns and their metadata of a specific table based on database type
 func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]ColumnInfo, error) {
 	var query string
+	var args []interface{}
 
 	switch dbType {
 	case "PostgreSQL":
@@ -211,6 +223,7 @@ func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]Colu
 			AND table_name = $2
 			ORDER BY ordinal_position;
 		`
+		args = []interface{}{schema, tableName}
 	case "MySQL":
 		query = `
 			SELECT
@@ -223,6 +236,7 @@ func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]Colu
 			AND table_name = ?
 			ORDER BY ordinal_position;
 		`
+		args = []interface{}{schema, tableName}
 	case "MSSQL":
 		query = `
 			SELECT
@@ -235,11 +249,25 @@ func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]Colu
 			AND table_name = ?
 			ORDER BY ordinal_position;
 		`
+		args = []interface{}{tableName}
+	case "Oracle":
+		query = `
+			SELECT
+				column_name,
+				data_type,
+				nullable,
+				data_default
+			FROM all_tab_columns
+			WHERE owner = :1
+			AND table_name = :2
+			ORDER BY column_id
+		`
+		args = []interface{}{strings.ToUpper(schema), strings.ToUpper(tableName)}
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)
 	}
 
-	rows, err := conn.Query(query, schema, tableName)
+	rows, err := conn.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query columns: %v", err)
 	}
@@ -258,11 +286,11 @@ func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]Colu
 		} else {
 			col.Default = nil
 		}
-		// Check if it's a date type
-		col.IsDate = strings.ToLower(col.Type) == "date" ||
-			strings.ToLower(col.Type) == "timestamp" ||
-			strings.ToLower(col.Type) == "datetime" ||
-			strings.ToLower(col.Type) == "timestamp without time zone"
+		// Check if it's a date type (handles Oracle TIMESTAMP variations as well)
+		typeLower := strings.ToLower(col.Type)
+		col.IsDate = typeLower == "date" ||
+			typeLower == "datetime" ||
+			strings.Contains(typeLower, "timestamp")
 		columns = append(columns, col)
 	}
 
@@ -272,21 +300,6 @@ func getColumnsForDBType(conn *sql.DB, dbType, schema, tableName string) ([]Colu
 
 	return columns, nil
 }
-
-// func (ncg *NoCodeGenerator) GetAllColumns(c *gin.Context) {
-// 	dbConnID := c.Query("connection_id")
-// 	schema := c.Query("schema_name")
-// 	tableName := c.Query("table_name")
-
-// 	conn := ncg.Db
-// 	userDBConn, err := utils.GetUserDBConnection(dbConnID, ncg.Db)
-// 	if err != nil {
-// 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Databse connection failed: %v", err)})
-// 	}
-
-// 	dbType := userDBConn.DBType
-
-// }
 
 // GetColumnsPublic - Get all columns for a specific table in public schema
 func (ncg *NoCodeGenerator) GetColumnsPublic(c *gin.Context) {
@@ -308,6 +321,7 @@ func (ncg *NoCodeGenerator) GetColumnsPublic(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to open db connection: %v", err)})
 		return
 	}
+	defer db.Close()
 
 	// Query columns
 	columns, err := getColumnsForDBType(db, userDBConn.DBType, schema, tableName)
@@ -392,8 +406,13 @@ func (ncg *NoCodeGenerator) ReportPreview(c *gin.Context) {
 	}
 
 	// Build count query (no parameters since no filters)
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS record_count", baseQuery)
-	//fmt.Printf(countQuery)
+	var countQuery string
+	if userConnection.DBType == "Oracle" {
+		countQuery = fmt.Sprintf("SELECT COUNT(*) FROM (%s) record_count", baseQuery)
+	} else {
+		countQuery = fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS record_count", baseQuery)
+	}
+
 	// Get total records for pagination info
 	var totalRecords int
 	err = conn.QueryRow(countQuery).Scan(&totalRecords)
@@ -410,6 +429,10 @@ func (ncg *NoCodeGenerator) ReportPreview(c *gin.Context) {
 	case "MSSQL":
 		offset := (page - 1) * pageSize
 		baseQuery += fmt.Sprintf(" OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, pageSize)
+	case "Oracle":
+		offset := (page - 1) * pageSize
+		// Wrap to avoid ORDER BY requirement for FETCH in Oracle
+		baseQuery = fmt.Sprintf("SELECT * FROM (%s) subq OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", baseQuery, offset, pageSize)
 	default:
 		offset := (page - 1) * pageSize
 		baseQuery += fmt.Sprintf(" LIMIT %d OFFSET %d", pageSize, offset)
@@ -557,6 +580,9 @@ func quoteTableName(dbType, schemaName, tableName string) string {
 		return fmt.Sprintf("`%s`.`%s`", schemaName, tableName)
 	case "MSSQL":
 		return fmt.Sprintf("[%s].[%s]", schemaName, tableName)
+	case "Oracle":
+		// Use unquoted uppercase to avoid case-sensitivity issues
+		return fmt.Sprintf("%s.%s", strings.ToUpper(schemaName), strings.ToUpper(tableName))
 	default:
 		return fmt.Sprintf("%s.%s", schemaName, tableName)
 	}
@@ -570,6 +596,9 @@ func quoteFieldName(dbType, fieldName string) string {
 		return fmt.Sprintf("`%s`", fieldName)
 	case "MSSQL":
 		return fmt.Sprintf("[%s]", fieldName)
+	case "Oracle":
+		// Use unquoted uppercase to avoid case-sensitivity issues
+		return strings.ToUpper(fieldName)
 	default:
 		return fieldName
 	}
@@ -581,7 +610,8 @@ func isNumericType(typeStr string) bool {
 		typeLower == "smallint" || typeLower == "tinyint" ||
 		typeLower == "numeric" || typeLower == "decimal" ||
 		typeLower == "float" || typeLower == "double" ||
-		typeLower == "real" || typeLower == "money"
+		typeLower == "real" || typeLower == "money" ||
+		typeLower == "number"
 }
 
 func buildNumericTotalsSQL(dbType, schemaName, tableName string, numericColumns []string) string {

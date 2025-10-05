@@ -26,6 +26,10 @@ func GetConnectionInfo(dbType, hostname string, port int, username, password, db
 		connStr := fmt.Sprintf("server=%s;port=%d;database=%s;user id=%s;password=%s",
 			hostname, port, dbName, username, password)
 		return connStr, "sqlserver"
+	case "Oracle":
+		// go-ora (pure Go) DSN format: oracle://user:password@host:port/service_name
+		connStr := fmt.Sprintf("oracle://%s:%s@%s:%d/%s", username, password, hostname, port, dbName)
+		return connStr, "oracle"
 	default:
 		return "", ""
 	}
@@ -172,6 +176,33 @@ func GetColumnsType(db *sql.DB, dbType, schemaName, tableName string, selectedFi
 				AND table_name = ?
 				ORDER BY ordinal_position`
 			args = []interface{}{schemaName, tableName}
+		}
+	case "Oracle":
+		if len(selectedFields) > 0 {
+			// Oracle dictionary stores identifiers in uppercase by default
+			args = []interface{}{strings.ToUpper(schemaName), strings.ToUpper(tableName)}
+			placeholders := make([]string, len(selectedFields))
+			upperFields := make([]string, len(selectedFields))
+			for i, f := range selectedFields {
+				placeholders[i] = ":" + fmt.Sprintf("%d", i+3) // :3, :4, ...
+				upperFields[i] = strings.ToUpper(f)
+			}
+			args = append(args, stringSliceToInterface(upperFields)...)
+			query = fmt.Sprintf(`
+				SELECT column_name, data_type, nullable
+				FROM all_tab_columns
+				WHERE owner = :1
+				AND table_name = :2
+				AND column_name IN (%s)
+				ORDER BY column_id`, strings.Join(placeholders, ","))
+		} else {
+			query = `
+				SELECT column_name, data_type, nullable
+				FROM all_tab_columns
+				WHERE owner = :1
+				AND table_name = :2
+				ORDER BY column_id`
+			args = []interface{}{strings.ToUpper(schemaName), strings.ToUpper(tableName)}
 		}
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", dbType)

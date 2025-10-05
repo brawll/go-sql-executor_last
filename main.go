@@ -17,6 +17,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"   // MySQL driver
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	_ "github.com/sijms/go-ora/v2" // Oracle driver
 )
 
 //go:embed openapi.yaml
