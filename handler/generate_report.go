@@ -86,6 +86,10 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		templateConfig = nil
 	}
 
+	if req.ReportTitle != "" {
+		templateConfig.ReportTitle = &req.ReportTitle
+	}
+
 	// Query Execution
 	var results []models.QueryResult
 	var queryToExecute string
@@ -332,7 +336,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 
 	path := "reports"
 	_, err3 := os.Stat(path)
-	if err != nil {
+	if err3 != nil {
 		if os.IsNotExist(err3) {
 			fmt.Printf("path don't exist: %v\n", path)
 			if err := os.Mkdir(path, 0755); err != nil {
@@ -489,20 +493,151 @@ func (rs *ReportService) transformTemplateConfig(rawTemplate map[string]interfac
 
 // applyTemplateToPDF applies template configuration to PDF config
 func (rs *ReportService) applyTemplateToPDF(pdfConfig *models.PDFConfig, templateConfig *TemplateConfig) {
-	// Apply title configuration
-	if templateConfig.ReportTitle != nil {
+	// Apply title configuration - ENSURE both fields are set
+	if templateConfig.ReportTitle != nil && *templateConfig.ReportTitle != "" {
 		pdfConfig.Title = *templateConfig.ReportTitle
+		pdfConfig.ReportTitleText = templateConfig.ReportTitle
+		log.Printf("✅ Report title set from template: '%s'", *templateConfig.ReportTitle)
+	} else {
+		// Set a default title if none provided
+		defaultTitle := "Database Report"
+		pdfConfig.Title = defaultTitle
+		pdfConfig.ReportTitleText = &defaultTitle
+		log.Printf("⚠️  No template title, using default: '%s'", defaultTitle)
 	}
 
 	// Apply header color configuration
-	// Convert hex color to RGB values
 	if templateConfig.TableHeadBgColor != "" {
 		rgb := hexToRGB(templateConfig.TableHeadBgColor)
 		pdfConfig.HeaderColor = []uint8{rgb[0], rgb[1], rgb[2]}
 	}
 
-	log.Printf("Applied template config to PDF: title=%s, header_color=%s",
-		pdfConfig.Title, templateConfig.TableHeadBgColor)
+	// Apply report title color
+	if templateConfig.TitleTextColor != "" {
+		rgb := hexToRGB(templateConfig.TitleTextColor)
+		pdfConfig.ReportTitleColor = []uint8{rgb[0], rgb[1], rgb[2]}
+	} else {
+		pdfConfig.ReportTitleColor = []uint8{14, 14, 14}
+	}
+
+	// Apply logo configuration with validation
+	if templateConfig.Logo != nil && *templateConfig.Logo != "" {
+		logoData := *templateConfig.Logo
+
+		// Validate base64 data URL if provided
+		if strings.HasPrefix(logoData, "data:image/") {
+			// Basic validation
+			if strings.Contains(logoData, ",") {
+				pdfConfig.LogoPath = templateConfig.Logo
+				pdfConfig.LogoPosition = templateConfig.LogoPosition
+				pdfConfig.LogoWidth = 80.0  // Default width
+				pdfConfig.LogoHeight = 60.0 // Default height
+				log.Printf("✅ Base64 logo configured: position=%s, size=%.0fx%.0f",
+					pdfConfig.LogoPosition, pdfConfig.LogoWidth, pdfConfig.LogoHeight)
+			} else {
+				log.Printf("⚠️  Invalid base64 logo data URL format, skipping logo")
+			}
+		} else {
+			// Handle regular file path or URL
+			pdfConfig.LogoPath = templateConfig.Logo
+			pdfConfig.LogoPosition = templateConfig.LogoPosition
+			pdfConfig.LogoWidth = 80.0
+			pdfConfig.LogoHeight = 60.0
+		}
+	}
+
+	// Apply contact details configuration
+	pdfConfig.ContactEnabled = templateConfig.ContactEnabled
+	if templateConfig.ContactEnabled {
+		pdfConfig.ContactName = templateConfig.ContactName
+		pdfConfig.ContactAddress = templateConfig.ContactAddress
+		pdfConfig.ContactEmail = templateConfig.ContactEmail
+		pdfConfig.ContactPhone = templateConfig.ContactPhone
+		pdfConfig.ContactPosition = templateConfig.ContactPosition
+
+		if templateConfig.ContactTextColor != "" {
+			rgb := hexToRGB(templateConfig.ContactTextColor)
+			pdfConfig.ContactTextColor = []uint8{rgb[0], rgb[1], rgb[2]}
+		} else {
+			pdfConfig.ContactTextColor = []uint8{26, 35, 126}
+		}
+
+		log.Printf("✅ Contact details configured: enabled=%v, position=%s",
+			pdfConfig.ContactEnabled, pdfConfig.ContactPosition)
+	}
+
+	// Calculate header height based on enabled components
+	pdfConfig.HeaderHeight = rs.calculateHeaderHeight(pdfConfig)
+
+	// Debug logging
+	log.Printf("📋 Final PDF config summary:")
+	log.Printf("   Title: '%s'", pdfConfig.Title)
+	log.Printf("   ReportTitleText: %v", pdfConfig.ReportTitleText)
+	log.Printf("   Logo enabled: %v", pdfConfig.LogoPath != nil)
+	log.Printf("   Contact enabled: %v", pdfConfig.ContactEnabled)
+	log.Printf("   Header height: %.1f", pdfConfig.HeaderHeight)
+}
+
+// calculateHeaderHeight calculates the required header height based on enabled components
+func (rs *ReportService) calculateHeaderHeight(pdfConfig *models.PDFConfig) float64 {
+	headerHeight := 20.0 // Reduced base header height
+
+	// Add space for logo if present
+	if pdfConfig.LogoPath != nil {
+		logoSpace := pdfConfig.LogoHeight + 15 // Logo height + reasonable padding
+		if logoSpace > headerHeight {
+			headerHeight = logoSpace
+		}
+	}
+
+	// Add space for contact details if enabled
+	if pdfConfig.ContactEnabled {
+		// Estimate contact height based on number of fields
+		contactFields := 0
+		if pdfConfig.ContactName != nil && *pdfConfig.ContactName != "" {
+			contactFields++
+		}
+		if pdfConfig.ContactAddress != nil && *pdfConfig.ContactAddress != "" {
+			contactFields += 2 // Address might take 2 lines
+		}
+		if pdfConfig.ContactEmail != nil && *pdfConfig.ContactEmail != "" {
+			contactFields++
+		}
+		if pdfConfig.ContactPhone != nil && *pdfConfig.ContactPhone != "" {
+			contactFields++
+		}
+
+		contactHeight := float64(contactFields)*11.0 + 20 // Line height * fields + padding
+		if contactHeight > headerHeight {
+			headerHeight = contactHeight
+		}
+	}
+
+	// Add space for report title if present
+	if pdfConfig.ReportTitleText != nil && *pdfConfig.ReportTitleText != "" {
+		titleHeight := 25.0 // Height needed for title
+
+		// If center is occupied, title goes below, so add to height
+		centerOccupied := (pdfConfig.LogoPath != nil && pdfConfig.LogoPosition == "center") ||
+			(pdfConfig.ContactEnabled && pdfConfig.ContactPosition == "center")
+
+		if centerOccupied {
+			headerHeight += titleHeight
+		} else {
+			// Title is alongside other elements
+			if titleHeight > headerHeight {
+				headerHeight = titleHeight
+			}
+		}
+	}
+
+	// Ensure minimum header height
+	if headerHeight < 40 {
+		headerHeight = 40
+	}
+
+	log.Printf("📏 Calculated header height: %.1f pts", headerHeight)
+	return headerHeight
 }
 
 // hexToRGB converts hex color string to RGB values

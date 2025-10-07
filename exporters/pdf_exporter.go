@@ -2,10 +2,13 @@ package exporters
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"go-sql-executor/models"
 
@@ -48,9 +51,6 @@ func (pg *PDFGenerator) setupFonts() error {
 	if err := pg.tryWindowsFonts(); err == nil {
 		return nil
 	}
-	if err := pg.tryMacOSFonts(); err == nil {
-		return nil
-	}
 	if err := pg.tryLinuxFonts(); err == nil {
 		return nil
 	}
@@ -72,22 +72,6 @@ func (pg *PDFGenerator) tryWindowsFonts() error {
 		}
 	}
 	return fmt.Errorf("no Windows fonts found")
-}
-
-// tryMacOSFonts attempts to load macOS system fonts.
-func (pg *PDFGenerator) tryMacOSFonts() error {
-	fontPaths := []string{
-		"/System/Library/Fonts/Arial.ttf",
-		"/System/Library/Fonts/Helvetica.ttc",
-		"/Library/Fonts/Arial.ttf",
-	}
-
-	for _, path := range fontPaths {
-		if _, err := os.Stat(path); err == nil {
-			return pg.pdf.AddTTFFont("arial", path)
-		}
-	}
-	return fmt.Errorf("no macOS fonts found")
 }
 
 // tryLinuxFonts attempts to load Linux system fonts.
@@ -160,16 +144,457 @@ func SavePDFToFile(pdfBytes []byte, filename string) error {
 	return os.WriteFile(filename, pdfBytes, 0644)
 }
 
+// calculateContactWidth estimates the width needed for contact details
+func (pg *PDFGenerator) calculateContactWidth() float64 {
+	if !pg.config.ContactEnabled {
+		return 0
+	}
+
+	maxWidth := 0.0
+	charWidth := 5.0 // Approximate character width
+
+	// Check each contact field and find the longest one
+	if pg.config.ContactName != nil && *pg.config.ContactName != "" {
+		width := float64(len(*pg.config.ContactName)) * charWidth
+		if width > maxWidth {
+			maxWidth = width
+		}
+	}
+
+	if pg.config.ContactEmail != nil && *pg.config.ContactEmail != "" {
+		width := float64(len(*pg.config.ContactEmail)) * charWidth
+		if width > maxWidth {
+			maxWidth = width
+		}
+	}
+
+	if pg.config.ContactPhone != nil && *pg.config.ContactPhone != "" {
+		width := float64(len(*pg.config.ContactPhone)) * charWidth
+		if width > maxWidth {
+			maxWidth = width
+		}
+	}
+
+	// For address, use a fixed reasonable width since it can wrap
+	if pg.config.ContactAddress != nil && *pg.config.ContactAddress != "" {
+		addressWidth := 140.0 // Smaller fixed width for address
+		if addressWidth > maxWidth {
+			maxWidth = addressWidth
+		}
+	}
+
+	// Add minimal padding and set reasonable bounds
+	maxWidth += 10 // Reduced padding
+	if maxWidth < 100 {
+		maxWidth = 100
+	}
+	if maxWidth > 160 { // Reduced maximum width
+		maxWidth = 160
+	}
+
+	log.Printf("📐 Calculated contact width: %.1f pts", maxWidth)
+	return maxWidth
+}
+
+// getHorizontalPosition calculates X position based on alignment
+func (pg *PDFGenerator) getHorizontalPosition(position string, leftPos, centerPos, rightPos, elementWidth float64) float64 {
+	switch position {
+	case "left":
+		return leftPos
+	case "right":
+		// For right alignment, subtract element width from right position
+		return rightPos - elementWidth
+	case "center":
+		return centerPos - (elementWidth / 2)
+	default:
+		return leftPos
+	}
+}
+
+// addTemplateHeader adds a customizable header with logo, title, and contact details
+func (pg *PDFGenerator) addTemplateHeader(startY, pageWidth float64) float64 {
+	log.Printf("pageWidth: %v", pageWidth)
+	currentY := startY
+	headerHeight := pg.config.HeaderHeight
+
+	log.Printf("🏗️  Building header: pageWidth=%.1f, headerHeight=%.1f", pageWidth, headerHeight)
+
+	// Determine positions - make right position much closer to edge
+	leftPos := pg.config.MarginX + 5           // Small padding from margin
+	centerPos := pageWidth / 2                 // Simple center calculation
+	rightEdge := pageWidth - pg.config.MarginX // Actual right edge considering margin
+
+	log.Printf("📍 Positions: left=%.1f, center=%.1f, rightEdge=%.1f", leftPos, centerPos, rightEdge)
+
+	logoY := currentY + 10
+	titleY := currentY + 15
+	contactY := currentY + 10
+
+	// Track what's in the center to adjust title positioning
+	centerOccupied := false
+
+	// Add logo if configured
+	if pg.config.LogoPath != nil {
+		logoX := pg.getHorizontalPosition(pg.config.LogoPosition, leftPos, centerPos, rightEdge, pg.config.LogoWidth)
+		err := pg.addBase64Logo(logoX, logoY)
+		if err != nil {
+			log.Printf("Warning: Failed to add logo: %v", err)
+		}
+
+		// Mark center as occupied if logo is there
+		if pg.config.LogoPosition == "center" {
+			centerOccupied = true
+		}
+	}
+
+	// Add contact details if enabled (do this before title to check center occupation)
+	if pg.config.ContactEnabled {
+		// Calculate actual contact width needed
+		contactWidth := pg.calculateActualContactWidth()
+		log.Printf("📐 Calculated actual contact width: %.1f pts", contactWidth)
+
+		// For right positioning, position so the contact block ends at rightEdge - small padding
+		var contactX float64
+		if pg.config.ContactPosition == "right" {
+			contactX = rightEdge - contactWidth - 10 // 10pts padding from right edge
+			log.Printf("📍 Right-aligned contact X position: %.1f (rightEdge=%.1f - width=%.1f - padding=10)",
+				contactX, rightEdge, contactWidth)
+		} else {
+			contactX = pg.getHorizontalPosition(pg.config.ContactPosition, leftPos, centerPos, rightEdge, contactWidth)
+			log.Printf("📍 %s-aligned contact X position: %.1f", pg.config.ContactPosition, contactX)
+		}
+
+		pg.addContactDetails(contactX, contactY)
+
+		// Mark center as occupied if contact is there
+		if pg.config.ContactPosition == "center" {
+			centerOccupied = true
+		}
+	}
+
+	// ALWAYS add report title if we have title text
+	titleText := ""
+	if pg.config.ReportTitleText != nil {
+		titleText = *pg.config.ReportTitleText
+	} else if pg.config.Title != "" {
+		titleText = pg.config.Title
+	}
+
+	if titleText != "" {
+		if centerOccupied {
+			// Move title below the center element
+			titleY = logoY + pg.config.LogoHeight + 15
+		}
+		pg.addReportTitle(titleText, titleY, "center", pageWidth)
+		log.Printf("📝 Report title should be added: '%s'", titleText)
+	} else {
+		log.Printf("⚠️  No report title found: ReportTitleText=%v, Title='%s'", pg.config.ReportTitleText, pg.config.Title)
+	}
+
+	return currentY + headerHeight + 10
+}
+
+// calculateActualContactWidth calculates the ACTUAL width needed based on content
+func (pg *PDFGenerator) calculateActualContactWidth() float64 {
+	if !pg.config.ContactEnabled {
+		return 0
+	}
+
+	maxLineWidth := 0.0
+	charWidth := 4.5      // More accurate character width for size 9 font
+	maxCharsPerLine := 30 // Maximum characters we want per line
+
+	// Check each contact field
+	contactLines := []string{}
+
+	if pg.config.ContactName != nil && *pg.config.ContactName != "" {
+		contactLines = append(contactLines, *pg.config.ContactName)
+	}
+
+	if pg.config.ContactAddress != nil && *pg.config.ContactAddress != "" {
+		// Split address into reasonable lines
+		address := *pg.config.ContactAddress
+		words := strings.Fields(address)
+		currentLine := ""
+
+		for _, word := range words {
+			testLine := currentLine
+			if testLine != "" {
+				testLine += " "
+			}
+			testLine += word
+
+			if len(testLine) <= maxCharsPerLine {
+				currentLine = testLine
+			} else {
+				if currentLine != "" {
+					contactLines = append(contactLines, currentLine)
+					currentLine = word
+				}
+			}
+		}
+		if currentLine != "" {
+			contactLines = append(contactLines, currentLine)
+		}
+	}
+
+	if pg.config.ContactEmail != nil && *pg.config.ContactEmail != "" {
+		contactLines = append(contactLines, *pg.config.ContactEmail)
+	}
+
+	if pg.config.ContactPhone != nil && *pg.config.ContactPhone != "" {
+		contactLines = append(contactLines, *pg.config.ContactPhone)
+	}
+
+	// Find the longest line
+	for _, line := range contactLines {
+		lineWidth := float64(len(line)) * charWidth
+		if lineWidth > maxLineWidth {
+			maxLineWidth = lineWidth
+		}
+		log.Printf("📏 Contact line: '%s' = %.1f pts", line, lineWidth)
+	}
+
+	// Add padding
+	actualWidth := maxLineWidth + 15 // Reasonable padding
+
+	// Set reasonable bounds
+	if actualWidth < 80 {
+		actualWidth = 80
+	}
+	if actualWidth > 180 {
+		actualWidth = 180
+	}
+
+	log.Printf("📐 Final contact width: %.1f pts (longest line: %.1f pts)", actualWidth, maxLineWidth)
+	return actualWidth
+}
+
+// addBase64Logo handles base64 encoded logo data
+func (pg *PDFGenerator) addBase64Logo(x, y float64) error {
+
+	// Parse the data URL: data:image/png;base64,iVBw0...
+	dataURL := *pg.config.LogoPath
+	parts := strings.SplitN(dataURL, ",", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid data URL format")
+	}
+
+	// Extract MIME type to determine file extension
+	header := parts[0]
+
+	base64Data := parts[1]
+
+	var fileExt string
+	if strings.Contains(header, "image/png") {
+		fileExt = ".png"
+	} else if strings.Contains(header, "image/jpeg") || strings.Contains(header, "image/jpg") {
+		fileExt = ".jpg"
+	} else if strings.Contains(header, "image/gif") {
+		fileExt = ".gif"
+	} else {
+		// Default to PNG if format is unclear
+		fileExt = ".png"
+		log.Printf("Unknown image format in data URL, defaulting to PNG: %s", header)
+	}
+
+	// Decode base64 data
+	imageData, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return fmt.Errorf("failed to decode base64 logo data: %w", err)
+	}
+
+	// Create temporary file for the logo
+	tempDir := os.TempDir()
+	tempFile, err := os.CreateTemp(tempDir, "pdf_logo_*"+fileExt)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary logo file: %w", err)
+	}
+	defer tempFile.Close()
+
+	tempFilePath := tempFile.Name()
+
+	// Write decoded data to temporary file
+	if _, err := tempFile.Write(imageData); err != nil {
+		os.Remove(tempFilePath) // Clean up on error
+		return fmt.Errorf("failed to write logo data to temporary file: %w", err)
+	}
+
+	// Close the file so it can be read by the PDF library
+	tempFile.Close()
+
+	// Add image to PDF using temporary file
+	err = pg.pdf.Image(tempFilePath, x, y, &gopdf.Rect{
+		W: pg.config.LogoWidth,
+		H: pg.config.LogoHeight,
+	})
+
+	// Clean up temporary file
+	os.Remove(tempFilePath)
+
+	if err != nil {
+		return fmt.Errorf("failed to add base64 logo to PDF: %w", err)
+	}
+
+	log.Printf("✅ Base64 logo added successfully at position (%.1f, %.1f)", x, y)
+	return nil
+}
+
+// addReportTitle adds the report title with custom styling
+func (pg *PDFGenerator) addReportTitle(title string, y float64, position string, pageWidth float64) {
+	if title == "" {
+		log.Printf("❌ Report title is empty, skipping")
+		return
+	}
+
+	log.Printf("📝 Adding report title: '%s' at Y=%.1f", title, y)
+
+	pg.pdf.SetFont("arial", "", 16) // Good size for title
+	pg.pdf.SetTextColor(pg.config.ReportTitleColor[0], pg.config.ReportTitleColor[1], pg.config.ReportTitleColor[2])
+
+	var x float64
+	// More accurate text width calculation
+	charWidth := 9.0 // Approximate character width for size 16 font
+	textWidth := float64(len(title)) * charWidth
+
+	switch position {
+	case "left":
+		x = pg.config.MarginX + 10
+	case "right":
+		x = pageWidth - pg.config.MarginX - textWidth - 10
+	default:
+		// Center the title
+		x = (pageWidth - textWidth) / 2
+	}
+
+	log.Printf("📍 Title position calculated: X=%.1f, Y=%.1f", x, y)
+
+	pg.pdf.SetXY(x, y)
+	pg.pdf.Cell(nil, title)
+
+	log.Printf("✅ Report title added successfully: '%s' at position (%.1f, %.1f)", title, x, y)
+}
+
+// addContactDetails adds contact information with proper line breaks
+func (pg *PDFGenerator) addContactDetails(x, y float64) {
+	if !pg.config.ContactEnabled {
+		log.Printf("❌ Contact details disabled")
+		return
+	}
+
+	log.Printf("📞 Adding contact details at X=%.1f, Y=%.1f", x, y)
+
+	pg.pdf.SetFont("arial", "", 10) // Smaller font for contact details
+	pg.pdf.SetTextColor(pg.config.ContactTextColor[0], pg.config.ContactTextColor[1], pg.config.ContactTextColor[2])
+
+	currentY := y
+	lineHeight := 11.0 // Reduced line height
+	maxWidth := 140.0  // Reduced maximum width for contact details
+
+	// Contact name
+	if pg.config.ContactName != nil && *pg.config.ContactName != "" {
+		log.Printf("  📝 Contact name: '%s' at X=%.1f, Y=%.1f", *pg.config.ContactName, x, currentY)
+		currentY = pg.addMultilineText(x, currentY, *pg.config.ContactName, maxWidth, lineHeight)
+		currentY += 2 // Small gap between fields
+	}
+
+	// Contact address (can be long and multiline)
+	if pg.config.ContactAddress != nil && *pg.config.ContactAddress != "" {
+		log.Printf("  📍 Contact address: '%s' at X=%.1f, Y=%.1f", *pg.config.ContactAddress, x, currentY)
+		currentY = pg.addMultilineText(x, currentY, *pg.config.ContactAddress, maxWidth, lineHeight)
+		currentY += 2
+	}
+
+	// Contact email
+	if pg.config.ContactEmail != nil && *pg.config.ContactEmail != "" {
+		log.Printf("  📧 Contact email: '%s' at X=%.1f, Y=%.1f", *pg.config.ContactEmail, x, currentY)
+		currentY = pg.addMultilineText(x, currentY, *pg.config.ContactEmail, maxWidth, lineHeight)
+		currentY += 2
+	}
+
+	// Contact phone
+	if pg.config.ContactPhone != nil && *pg.config.ContactPhone != "" {
+		log.Printf("  📱 Contact phone: '%s' at X=%.1f, Y=%.1f", *pg.config.ContactPhone, x, currentY)
+		pg.pdf.SetXY(x, currentY)
+		pg.pdf.Cell(nil, *pg.config.ContactPhone)
+	}
+
+	log.Printf("✅ Contact details positioning complete")
+}
+
+// addMultilineText handles long text by breaking it into multiple lines
+func (pg *PDFGenerator) addMultilineText(x, y float64, text string, maxWidth, lineHeight float64) float64 {
+	if text == "" {
+		return y
+	}
+
+	log.Printf("📝 Adding multiline text at X=%.1f, Y=%.1f: '%s' (maxWidth=%.1f)", x, y, text, maxWidth)
+
+	// Estimate characters per line based on font size and available width
+	charWidth := 4.5 // More accurate character width for size 9 font
+	charsPerLine := int(maxWidth / charWidth)
+
+	if charsPerLine < 10 {
+		charsPerLine = 10 // Minimum characters per line
+	}
+
+	words := strings.Fields(text)
+	var lines []string
+	var currentLine string
+
+	for _, word := range words {
+		testLine := currentLine
+		if testLine != "" {
+			testLine += " "
+		}
+		testLine += word
+
+		if len(testLine) <= charsPerLine {
+			currentLine = testLine
+		} else {
+			if currentLine != "" {
+				lines = append(lines, currentLine)
+				currentLine = word
+			} else {
+				// Word is too long, break it
+				for len(word) > charsPerLine {
+					lines = append(lines, word[:charsPerLine])
+					word = word[charsPerLine:]
+				}
+				currentLine = word
+			}
+		}
+	}
+
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	// Draw each line
+	currentY := y
+	for i, line := range lines {
+		log.Printf("  📄 Line %d at X=%.1f, Y=%.1f: '%s'", i+1, x, currentY, line)
+		pg.pdf.SetXY(x, currentY)
+		pg.pdf.Cell(nil, line)
+		currentY += lineHeight
+	}
+
+	return currentY
+}
+
 // addQueryResultWide adds a query result to the wide format page.
 func (pg *PDFGenerator) addQueryResultWide(result models.QueryResult, queryNum int, startY, pageWidth float64) float64 {
 	currentY := startY
 
-	// Query header
-	pg.pdf.SetFont("arial", "", 16)
-	pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
-	pg.pdf.SetXY(pg.config.MarginX, currentY)
-	pg.pdf.Cell(nil, fmt.Sprintf("Query %d Results", queryNum))
-	currentY += 25
+	// Only show query header if no template header is configured
+	if pg.config.ReportTitleText == nil {
+		// Query header
+		pg.pdf.SetFont("arial", "", 16)
+		pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
+		pg.pdf.SetXY(pg.config.MarginX, currentY)
+		pg.pdf.Cell(nil, fmt.Sprintf("Query %d Results", queryNum))
+		currentY += 25
+	}
 
 	// Status line
 	pg.pdf.SetFont("arial", "", 11)
@@ -307,8 +732,14 @@ func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []models.QueryResult) 
 
 	pg.pdf.AddPage()
 
-	// Add all query results on the single optimized page
+	// Add template header first
 	currentY := pg.config.MarginY
+	if pg.config.LogoPath != nil || pg.config.ContactEnabled || pg.config.ReportTitleText != nil {
+		currentY = pg.addTemplateHeader(currentY, totalWidth)
+	}
+
+	// Add all query results on the single optimized page
+
 	for i, result := range results {
 		currentY = pg.addQueryResultWide(result, i+1, currentY, totalWidth)
 		currentY += 30 // Reasonable space between queries
