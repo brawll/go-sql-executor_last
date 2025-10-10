@@ -566,8 +566,26 @@ func (rs *ReportService) applyTemplateToPDF(pdfConfig *models.PDFConfig, templat
 			pdfConfig.ContactEnabled, pdfConfig.ContactPosition)
 	}
 
-	// Calculate header height based on enabled components
+	// Apply footer configuration
+	pdfConfig.FooterEnabled = templateConfig.FooterEnabled
+	if templateConfig.FooterEnabled {
+		pdfConfig.FooterText = templateConfig.FooterText
+		if templateConfig.FooterPosition == "" {
+			pdfConfig.FooterPosition = "center" // Default to center
+		} else {
+			pdfConfig.FooterPosition = templateConfig.FooterPosition
+		}
+
+		// Set footer text color (could be customizable in future)
+		pdfConfig.FooterTextColor = []uint8{80, 80, 80} // Gray color for footer
+
+		log.Printf("✅ Footer configured: enabled=%v, position=%s, text='%v'",
+			pdfConfig.FooterEnabled, pdfConfig.FooterPosition, pdfConfig.FooterText)
+	}
+
+	// Calculate header and footer heights
 	pdfConfig.HeaderHeight = rs.calculateHeaderHeight(pdfConfig)
+	pdfConfig.FooterHeight = rs.calculateFooterHeight(pdfConfig)
 
 	// Debug logging
 	log.Printf("📋 Final PDF config summary:")
@@ -575,7 +593,21 @@ func (rs *ReportService) applyTemplateToPDF(pdfConfig *models.PDFConfig, templat
 	log.Printf("   ReportTitleText: %v", pdfConfig.ReportTitleText)
 	log.Printf("   Logo enabled: %v", pdfConfig.LogoPath != nil)
 	log.Printf("   Contact enabled: %v", pdfConfig.ContactEnabled)
+	log.Printf("   Footer enabled: %v", pdfConfig.FooterEnabled)
 	log.Printf("   Header height: %.1f", pdfConfig.HeaderHeight)
+	log.Printf("   Footer height: %.1f", pdfConfig.FooterHeight)
+}
+
+// calculateFooterHeight calculates the required footer height
+func (rs *ReportService) calculateFooterHeight(pdfConfig *models.PDFConfig) float64 {
+	if !pdfConfig.FooterEnabled || pdfConfig.FooterText == nil || *pdfConfig.FooterText == "" {
+		return 0.0
+	}
+
+	// Basic footer height calculation
+	footerHeight := 30.0 // Base height for footer text + padding
+
+	return footerHeight
 }
 
 // calculateHeaderHeight calculates the required header height based on enabled components

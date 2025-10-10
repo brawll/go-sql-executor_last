@@ -144,58 +144,6 @@ func SavePDFToFile(pdfBytes []byte, filename string) error {
 	return os.WriteFile(filename, pdfBytes, 0644)
 }
 
-// calculateContactWidth estimates the width needed for contact details
-func (pg *PDFGenerator) calculateContactWidth() float64 {
-	if !pg.config.ContactEnabled {
-		return 0
-	}
-
-	maxWidth := 0.0
-	charWidth := 5.0 // Approximate character width
-
-	// Check each contact field and find the longest one
-	if pg.config.ContactName != nil && *pg.config.ContactName != "" {
-		width := float64(len(*pg.config.ContactName)) * charWidth
-		if width > maxWidth {
-			maxWidth = width
-		}
-	}
-
-	if pg.config.ContactEmail != nil && *pg.config.ContactEmail != "" {
-		width := float64(len(*pg.config.ContactEmail)) * charWidth
-		if width > maxWidth {
-			maxWidth = width
-		}
-	}
-
-	if pg.config.ContactPhone != nil && *pg.config.ContactPhone != "" {
-		width := float64(len(*pg.config.ContactPhone)) * charWidth
-		if width > maxWidth {
-			maxWidth = width
-		}
-	}
-
-	// For address, use a fixed reasonable width since it can wrap
-	if pg.config.ContactAddress != nil && *pg.config.ContactAddress != "" {
-		addressWidth := 140.0 // Smaller fixed width for address
-		if addressWidth > maxWidth {
-			maxWidth = addressWidth
-		}
-	}
-
-	// Add minimal padding and set reasonable bounds
-	maxWidth += 10 // Reduced padding
-	if maxWidth < 100 {
-		maxWidth = 100
-	}
-	if maxWidth > 160 { // Reduced maximum width
-		maxWidth = 160
-	}
-
-	log.Printf("📐 Calculated contact width: %.1f pts", maxWidth)
-	return maxWidth
-}
-
 // getHorizontalPosition calculates X position based on alignment
 func (pg *PDFGenerator) getHorizontalPosition(position string, leftPos, centerPos, rightPos, elementWidth float64) float64 {
 	switch position {
@@ -601,8 +549,7 @@ func (pg *PDFGenerator) addQueryResultWide(result models.QueryResult, queryNum i
 	pg.pdf.SetTextColor(80, 80, 80)
 	pg.pdf.SetXY(pg.config.MarginX, currentY)
 
-	pg.pdf.Cell(nil, fmt.Sprintf("Status: %s | Time: %s",
-		result.Status, result.Timestamp))
+	pg.pdf.Cell(nil, fmt.Sprintf("| Time: %s |", result.Timestamp))
 	currentY += 20
 
 	// Show query if enabled

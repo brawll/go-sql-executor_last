@@ -41,4 +41,11 @@ type PDFConfig struct {
 	ContactPosition  string  // "left", "right"
 	ContactTextColor []uint8 // RGB values for contact text
 	HeaderHeight     float64 // Total header height to reserve space
+
+	// Footer configuration fields
+	FooterEnabled   bool
+	FooterText      *string
+	FooterPosition  string  // "left", "center", "right" - default "center"
+	FooterTextColor []uint8 // RGB values for footer text
+	FooterHeight    float64 // Footer height to reserve space
 }
