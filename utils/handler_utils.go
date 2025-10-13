@@ -48,13 +48,13 @@ func VerifyConnection(dbType, hostname string, port int, username, password, dbN
 	}
 
 	// Use a bounded context to ping
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := testDB.PingContext(ctx); err != nil {
 		testDB.Close() // Close before returning error
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("db ping timed out after 4s: %w", err)
+			return nil, fmt.Errorf("db ping timed out after 10s: %w", err)
 		}
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}

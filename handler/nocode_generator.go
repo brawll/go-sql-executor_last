@@ -88,6 +88,19 @@ func getTablesForDBType(conn *sql.DB, dbType string) ([]TableInfo, error) {
 			AND table_type = 'BASE TABLE'
 			ORDER BY table_schema, table_name;
 		`
+	case "Vertica":
+		query = `
+			SELECT
+				table_schema,
+				table_name
+			FROM information_schema.tables
+			WHERE table_schema NOT IN (
+				'v_catalog',
+				'information_schema'
+			)
+			AND table_type = 'BASE TABLE'
+			ORDER BY table_schema, table_name;
+		`
 	case "MySQL":
 		query = `
 			SELECT

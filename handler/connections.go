@@ -45,7 +45,7 @@ func (dcm *DatabaseConnectionManager) CaptureSchema(db *sql.DB, dbType string, d
 	var columnsArgs func(string) []interface{}
 
 	switch dbType {
-	case "PostgreSQL":
+	case "PostgreSQL", "Vertica":
 		tablesQuery = "SELECT t.table_name, t.table_type FROM information_schema.tables t WHERE t.table_schema = $1 ORDER BY t.table_name"
 		tablesArgs = []interface{}{"public"}
 
