@@ -24,10 +24,7 @@ type PDFGenerator struct {
 // DefaultPDFConfig returns default PDF configuration for wide horizontal layout.
 func DefaultPDFConfig() models.PDFConfig {
 	return models.PDFConfig{
-		Title:          "SQL Query Results",
-		Author:         "SQL Executor",
-		Subject:        "Database Query Report",
-		CompanyName:    "Your Company",
+		Title:          "Query Execution Report",
 		HeaderColor:    []uint8{52, 73, 94},
 		TableRowHeight: 20.0,
 		FontSize:       10,
@@ -531,7 +528,7 @@ func (pg *PDFGenerator) addMultilineText(x, y float64, text string, maxWidth, li
 }
 
 // addQueryResultWide adds a query result to the wide format page.
-func (pg *PDFGenerator) addQueryResultWide(result models.QueryResult, queryNum int, startY, pageWidth float64) float64 {
+func (pg *PDFGenerator) addQueryResultWide(result models.QueryResult, startY, pageWidth float64) float64 {
 	currentY := startY
 
 	// Only show query header if no template header is configured
@@ -540,7 +537,7 @@ func (pg *PDFGenerator) addQueryResultWide(result models.QueryResult, queryNum i
 		pg.pdf.SetFont("arial", "", 16)
 		pg.pdf.SetTextColor(pg.config.HeaderColor[0], pg.config.HeaderColor[1], pg.config.HeaderColor[2])
 		pg.pdf.SetXY(pg.config.MarginX, currentY)
-		pg.pdf.Cell(nil, fmt.Sprintf("Query %d Results", queryNum))
+		pg.pdf.Cell(nil, pg.config.Title)
 		currentY += 25
 	}
 
@@ -666,10 +663,8 @@ func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []models.QueryResult) 
 	// Set PDF metadata
 	pg.pdf.SetInfo(gopdf.PdfInfo{
 		Title:    pg.config.Title + " (Optimized Wide Format)",
-		Author:   pg.config.Author,
-		Subject:  pg.config.Subject + " - Compact Full Content",
 		Creator:  "SQL Executor v2.0 - Optimized Wide Mode",
-		Producer: "GoPDF Enhanced Wide",
+		Producer: "Digiice - Rahul",
 	})
 
 	// Setup fonts
@@ -687,8 +682,8 @@ func (pg *PDFGenerator) GenerateWideHorizontalPDF(results []models.QueryResult) 
 
 	// Add all query results on the single optimized page
 
-	for i, result := range results {
-		currentY = pg.addQueryResultWide(result, i+1, currentY, totalWidth)
+	for _, result := range results {
+		currentY = pg.addQueryResultWide(result, currentY, totalWidth)
 		currentY += 30 // Reasonable space between queries
 	}
 

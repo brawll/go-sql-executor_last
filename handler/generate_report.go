@@ -80,13 +80,17 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 	}
 
 	// Fetch template config if template_id is provided
-	templateConfig, err := rs.fetchTemplateConfig(&req)
-	if err != nil {
-		log.Printf("Warning: Failed to fetch template config: %v", err)
-		templateConfig = nil
+	var templateConfig *TemplateConfig
+	var fetchTemplateErr error
+	if req.TemplateID != nil && *req.TemplateID != "" {
+		templateConfig, fetchTemplateErr = rs.fetchTemplateConfig(&req)
+		if fetchTemplateErr != nil {
+			log.Printf("Warning: Failed to fetch template config: %v", fetchTemplateErr)
+			templateConfig = nil
+		}
 	}
 
-	if req.ReportTitle != "" {
+	if templateConfig != nil && req.ReportTitle != "" {
 		templateConfig.ReportTitle = &req.ReportTitle
 	}
 
@@ -237,12 +241,10 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		fmt.Printf("Generating PDF report...\n")
 
 		pdfConfig := exporters.DefaultPDFConfig()
-		pdfConfig.CompanyName = "Rahul's Database Reports"
-		pdfConfig.Title = "SQL Query Execution Report"
-		pdfConfig.FontSize = 10
-		pdfConfig.TableRowHeight = 20.0
-		pdfConfig.MarginX = 20.0
-		pdfConfig.MarginY = 20.0
+
+		if req.ReportTitle != "" {
+			pdfConfig.Title = req.ReportTitle
+		}
 
 		// Apply template config to PDF if available
 		if templateConfig != nil {

@@ -15,9 +15,6 @@ type HTMLConfig struct {
 // PDFConfig holds PDF generation configuration.
 type PDFConfig struct {
 	Title          string
-	Author         string
-	Subject        string
-	CompanyName    string
 	HeaderColor    []uint8 // RGB values
 	TableRowHeight float64
 	FontSize       int
