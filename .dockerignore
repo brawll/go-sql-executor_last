@@ -1,0 +1,11 @@
+go-sql-executor.exe
+exporters/try.md
+.gitignore
+info.md
+query_results_combined.csv
+query_results_report.html
+query_results_wide_horizontal.pdf
+query_results.xlsx
+query.http
+README.md
+New-folder

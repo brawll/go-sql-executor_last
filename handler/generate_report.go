@@ -2,11 +2,13 @@ package handler
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go-sql-executor/exporters"
 	"go-sql-executor/utils"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,12 +62,6 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 	// Start tracking execution time
 	startTime := time.Now()
 
-	// Verify HTTP method
-	if c.Request.Method != http.MethodPost {
-		rs.writeErrorResponseGin(c, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
-		return
-	}
-
 	// Parse request body
 	var req models.ReportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -98,7 +94,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 	var results []models.QueryResult
 	var queryToExecute string
 
-	// New approach: build query from connection and schema info
+	// build query from connection and schema info
 	userConnInfo, err := utils.GetUserDBConnection(req.ConnectionID, rs.Db)
 	if err != nil {
 		rs.writeErrorResponseGin(c, http.StatusInternalServerError, "CONNECTION_ERROR", fmt.Sprintf("Failed to get connection info: %v", err), nil)
@@ -131,6 +127,18 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		return
 	}
 
+	var report_title, report_filename string
+
+	report_filename = req.ReportFilename
+	if req.ReportFilename == "" {
+		report_filename = "report_" + time.Now().Format("2006-01-02_15-04-05")
+	}
+
+	report_title = req.ReportTitle
+	if req.ReportTitle == "" {
+		report_title = req.CategoryName + "_" + templateConfig.Name + "_" + req.TableName
+	}
+
 	// Generate files and collect file information
 	var files []models.FileInfo
 	var errors []string
@@ -139,7 +147,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 	if rs.ExportCSV {
 		fmt.Printf("Generating CSV report...\n")
 		csvExporter := exporters.NewCSVExporter()
-		csvFilename := "query_results_combined.csv"
+		csvFilename := report_filename + ".csv"
 
 		if err := csvExporter.ExportToCSV(results, csvFilename); err != nil {
 			log.Printf("Failed to export CSV: %v", err)
@@ -169,7 +177,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 	// Export Excel
 	if rs.ExportExcel && len(results) > 0 {
 		result := results[0] // Process first result
-		excelFilename := "query_results.xlsx"
+		excelFilename := report_filename + ".xlsx"
 
 		if err := exporters.ExportToExcel(result, excelFilename); err != nil {
 			log.Printf("Failed to export Excel: %v", err)
@@ -210,7 +218,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 			log.Printf("Failed to generate HTML: %v", err)
 			errors = append(errors, fmt.Sprintf("HTML generation failed: %v", err))
 		} else {
-			htmlOutputFile := "query_results_report.html"
+			htmlOutputFile := report_filename + ".html"
 
 			if err := exporters.SaveHTMLToFile(htmlBytes, htmlOutputFile); err != nil {
 				log.Printf("Failed to save HTML: %v", err)
@@ -258,7 +266,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 			log.Printf("Failed to generate PDF: %v", err)
 			errors = append(errors, fmt.Sprintf("PDF generation failed: %v", err))
 		} else {
-			pdfOutputFile := "query_results_wide_horizontal.pdf"
+			pdfOutputFile := report_filename + ".pdf"
 
 			if err := exporters.SavePDFToFile(pdfBytes, pdfOutputFile); err != nil {
 				log.Printf("Failed to save PDF: %v", err)
@@ -325,16 +333,7 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		response.Message = "No query results available"
 	}
 
-	// var report_title, report_filename string
-	// if req.ReportFilename == "" {
-	// 	report_filename = "report_" + time.Now().Format("2006-01-02_15-04-05")
-	// } else {
-	// 	report_filename = req.ReportFilename
-	// }
-
-	// if req.ReportTitle == "" {
-	// 	report_title = req.CategoryName + "_" + templateConfig.Name + "_" + req.TableName
-	// }
+	downloadToken := GenerateInsecureRandomBytes()
 
 	path := "reports"
 	_, err3 := os.Stat(path)
@@ -355,6 +354,22 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 
 	// Return response
 	c.JSON(http.StatusOK, response)
+}
+
+func generateDownloadURL(baseURL, token string) string {
+	return fmt.Sprintf("%s/static-reports/direct-download?token=%s", baseURL, token)
+}
+
+func generatePreviewURL(baseURL, token string) string {
+	return fmt.Sprintf("%s/static-reports/preview-download?token=%s", baseURL, token)
+}
+
+func GenerateInsecureRandomBytes() string {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	randomBytes := make([]byte, 8) // Can increase tokenLength here to increase the string length.
+	r.Read(randomBytes)
+
+	return hex.EncodeToString(randomBytes)
 }
 
 // fetchTemplateConfig fetches and transforms template configuration

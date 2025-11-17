@@ -1,0 +1,42 @@
+
+services:
+  # Your Go Application Service
+  app:
+    build: .  # Tells Docker Compose to build the image from the Dockerfile in this directory
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_USER=postgres
+      - DB_PASSWORD=RahulM6?
+      - DB_NAME=dep-sql-executor
+      - DB_PORT=5432
+      - DB_DRIVER=postgres
+      - SSL_MODE=disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+      
+
+  # The PostgreSQL Database Service
+  db:
+    image: postgres:17.6-bookworm # debian stable release
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=RahulM6?
+      - POSTGRES_DB=dep-sql-executor
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # Persists data correctly
+    ports:
+      - "5434:5432"
+    # Added the check since the app can run before the db (which will lead to crashing), now it will wait for a healthcheck from db first.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dep-sql-executor"] # Checks for DB readiness
+      interval: 5s      # Check every 5 seconds
+      timeout: 5s       # Give the check 5 seconds to pass
+      retries: 5        # Try 5 times before giving up
+      start_period: 10s # Give the container 10s to start up before checking
+    
+volumes:
+  postgres_data:

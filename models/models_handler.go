@@ -34,20 +34,41 @@ type ReportRequest struct {
 
 // OpenAPI-compliant response structures
 type ReportResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	// Data    *QueryResult     `json:"data,omitempty"`
-	Files   []FileInfo       `json:"files,omitempty"`
-	Summary ExecutionSummary `json:"summary"`
+	Success               bool                   `json:"success"`
+	Message               string                 `json:"message"`
+	PrimaryDownload       string                 `json:"primary_download"`
+	PrimaryPreview        string                 `json:"primary_preview,omitempty"`
+	TotalFormatsGenerated int                    `json:"total_formats_generated"`
+	AvailableFormats      []string               `json:"available_formats"`
+	Reports               map[string]*ReportInfo `json:"reports"`
+	DataInfo              DataInfo               `json:"json_info"`
+	Files                 []FileInfo             `json:"files,omitempty"`
+	Summary               ExecutionSummary       `json:"summary"`
+	TemplateApplied       bool                   `json:"template_applied"`
+}
+
+type ReportInfo struct {
+	Filename    string `json:"filename"`
+	FilePath    string `json:"file_path"`
+	Token       string `json:"token"`
+	DownloadURL string `json:"download_url"`
+	MediaType   string `json:"media_type"`
+	PreviewURL  string `json:"preview_url,omitempty"`
+}
+
+type DataInfo struct {
+	RowsCount    int `json:"rows_count"`
+	ColumnsCount int `json:"columns_count"`
 }
 
 type FileInfo struct {
-	Type      string `json:"type"`
-	Filename  string `json:"filename"`
-	Path      string `json:"path,omitempty"`
-	SizeBytes int64  `json:"size_bytes,omitempty"`
-	Columns   int    `json:"columns,omitempty"`
-	Rows      int    `json:"rows,omitempty"`
+	Type     string `json:"type"`
+	Filename string `json:"filename"`
+	Path     string `json:"path,omitempty"`
+
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	Columns   int   `json:"columns,omitempty"`
+	Rows      int   `json:"rows,omitempty"`
 }
 
 type ExecutionSummary struct {

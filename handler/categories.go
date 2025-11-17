@@ -674,8 +674,9 @@ func validateScheduleRequest(req models.ScheduleReportRequest) error {
 			return fmt.Errorf("scheduled_times is required for daily schedule")
 		}
 		// Validate time formats
+		timeRegex := regexp.MustCompile(`^\d{2}:\d{2}$`)
 		for _, timeStr := range req.ScheduledTimes {
-			if matched, _ := regexp.MatchString(`^\d{2}:\d{2}$`, timeStr); !matched {
+			if !timeRegex.MatchString(timeStr) {
 				return fmt.Errorf("invalid time format: %s, use HH:MM", timeStr)
 			}
 		}
