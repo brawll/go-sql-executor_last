@@ -138,7 +138,8 @@ func main() {
 	r.DELETE("/api/templates/:id", templatesHandler.DeleteTemplate)
 
 	// Static reports routes
-	//r.GET("/static-reports/direct-download", staticReports.directDownloadHandler)
+	r.GET("/static-reports/direct-download", handler.DirectDownloadHandler)
+	r.GET("/static-reports/preview", handler.PreviewHandler)
 
 	// Serve OpenAPI spec
 	r.GET("/openapi.yaml", func(c *gin.Context) {
@@ -152,33 +153,7 @@ func main() {
 		httpSwagger.URL("/openapi.yaml"),
 	)))
 
-	log.Println("Combined services starting on :8000")
-	log.Println("Available endpoints:")
-	log.Println("  POST /api/v1/generate-report - Generate reports (raw SQL)")
-	log.Println("  POST /api/generate-report - Generate reports (nocode table selector)")
-	log.Println("  GET  /health - Health check")
-	log.Println("  POST /api/connections - Create database connection")
-	log.Println("  GET  /api/connections - Get all connections")
-	log.Println("  DELETE /api/connections/:connection_id - Delete connection")
-	log.Println("  GET  /api/tables/:connection_id - Get tables for connection")
-	log.Println("  GET  /api/columns/public/:table_name - Get columns for table in public schema")
-	log.Println("  GET /api/categories - Get all category reports")
-	log.Println("  GET /api/categories/:category_name - Get reports by category")
-	log.Println("  POST /api/categories - Create new category")
-	log.Println("  DELETE /api/categories/:category_name/reports/:report_id - Delete category report")
-	log.Println("  PUT /api/categories/:category_name/reports/:report_id/update-dates - Update report dates")
-	log.Println("  POST /api/categories/:category_name/reports/:report_id/schedule - Schedule report")
-	log.Println("  GET /api/category-definitions - Get all category definitions")
-	log.Println("  DELETE /api/categories/definitions/:category_id - Delete category definition")
-	log.Println("  GET /api/templates - Get all report templates")
-	log.Println("  POST /api/templates - Create a new report template")
-	log.Println("  GET /api/templates/:id - Get specific template by ID")
-	log.Println("  PUT /api/templates/:id - Update an existing template")
-	log.Println("  DELETE /api/templates/:id - Delete a template")
-	log.Println("  GET  /docs/ - Interactive API documentation (Swagger UI)")
-	log.Println("  GET  /openapi.yaml - OpenAPI 3.x specification")
-
-	if err := r.Run(":8000"); err != nil {
+	if err := r.Run(":8080"); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }

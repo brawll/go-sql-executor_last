@@ -18,6 +18,7 @@ import (
 	"go-sql-executor/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // TemplateConfig represents the flattened template configuration for PDF generation
@@ -312,16 +313,119 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		TotalExecutionTime: executionTime,
 	}
 
+	// Prepare data info from first successful result
+	dataInfo := models.DataInfo{}
+	if len(results) > 0 && results[0].Data != nil {
+		dataInfo.RowsCount = len(results[0].Data.Rows)
+		dataInfo.ColumnsCount = len(results[0].Data.Columns)
+	}
+
+	// Default category name
+	categoryName := req.CategoryName
+	if categoryName == "" {
+		categoryName = "Uncategorized"
+	}
+
+	// Build per-format reports map with tokens and URLs
+	reports := make(map[string]*models.ReportInfo)
+	baseUrl := getBaseUrl(c)
+
+	for _, f := range files {
+		// Generate token and expiry
+		token := generateSecureToken()
+		expiry := time.Now().AddDate(10, 0, 0)
+
+		formatKey := strings.ToLower(f.Type)
+		if formatKey == "excel" {
+			formatKey = "xlsx"
+		}
+
+		mediaType := "application/octet-stream"
+		switch formatKey {
+		case "pdf":
+			mediaType = "application/pdf"
+		case "csv":
+			mediaType = "text/csv"
+		case "xlsx":
+			mediaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+		case "html":
+			mediaType = "text/html"
+		}
+
+		downloadPath := fmt.Sprintf("/static-reports/direct-download?token=%s", token)
+		previewPath := fmt.Sprintf("/static-reports/preview?token=%s", token)
+
+		reportInfo := &models.ReportInfo{
+			Filename:    f.Filename,
+			FilePath:    f.Path,
+			Token:       token,
+			DownloadURL: baseUrl + downloadPath,
+			MediaType:   mediaType,
+		}
+
+		if formatKey == "pdf" {
+			reportInfo.PreviewURL = baseUrl + previewPath
+		}
+
+		reports[formatKey] = reportInfo
+
+		// Persist into category_table so /api/categories sees it
+		if categoryDB != nil {
+			id := uuid.New().String()
+			reportName := fmt.Sprintf("%s (%s)", report_title, strings.ToUpper(formatKey))
+
+			_, err := categoryDB.Exec(`
+				INSERT INTO user_connection.category_table (
+					id,
+					category_name,
+					report_name,
+					filename,
+					file_path,
+					connection_id,
+					query,
+					original_query_template,
+					user_token,
+					expiry_time,
+					created_at
+				) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+			`,
+				id,
+				categoryName,
+				reportName,
+				f.Filename,
+				f.Path,
+				req.ConnectionID,
+				queryToExecute,
+				queryToExecute,
+				token,
+				expiry,
+			)
+			if err != nil {
+				log.Printf("Error inserting into category_table: %v", err)
+			}
+		}
+	}
+
+	// Collect available formats
+	availableFormats := make([]string, 0, len(reports))
+	for k := range reports {
+		availableFormats = append(availableFormats, k)
+	}
+
 	// Prepare response
 	response := models.ReportResponse{
-		Success: len(errors) == 0,
-		Files:   files,
-		Summary: summary,
+		Success:               len(errors) == 0,
+		Files:                 files,
+		Summary:               summary,
+		Reports:               reports,
+		AvailableFormats:      availableFormats,
+		TotalFormatsGenerated: len(reports),
+		DataInfo:              dataInfo,
+		TemplateApplied:       templateConfig != nil,
 	}
 
 	// Handle success/failure cases
 	if len(results) > 0 && results[0].Status == "success" {
-
 		if len(errors) > 0 {
 			response.Message = fmt.Sprintf("Report executed successfully but some files failed to generate: %s", errors[0])
 		} else {
@@ -333,23 +437,10 @@ func (rs *ReportService) GenerateReportHandler(c *gin.Context) {
 		response.Message = "No query results available"
 	}
 
-	downloadToken := GenerateInsecureRandomBytes()
-
-	path := "reports"
-	_, err3 := os.Stat(path)
-	if err3 != nil {
-		if os.IsNotExist(err3) {
-			fmt.Printf("path don't exist: %v\n", path)
-			if err := os.Mkdir(path, 0755); err != nil {
-				log.Fatal("err")
-			} else {
-				fmt.Printf("created directory %s", path)
-			}
-		} else {
-			fmt.Printf("Error checking path %v\n", err3)
-		}
-		return
-
+	// Set primary download/preview to PDF if available
+	if pdfReport, ok := reports["pdf"]; ok {
+		response.PrimaryDownload = pdfReport.DownloadURL
+		response.PrimaryPreview = pdfReport.PreviewURL
 	}
 
 	// Return response

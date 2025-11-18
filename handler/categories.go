@@ -56,6 +56,11 @@ func validateDateFormat(dateStr string) bool {
 
 // getBaseUrl constructs the base URL from request
 func getBaseUrl(c *gin.Context) string {
+	// Prefer explicit BASE_URL from environment if provided (e.g. https://reports.mycompany.com)
+	if envBase := os.Getenv("BASE_URL"); envBase != "" {
+		return envBase
+	}
+
 	scheme := "http"
 	if c.Request.TLS != nil {
 		scheme = "https"
